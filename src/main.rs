@@ -1,4 +1,4 @@
-use nrs_language_server::server::BackendHtmx;
+use htmx_lsp::server::BackendHtmx;
 use tower_lsp::{LspService, Server};
 #[tokio::main]
 async fn main() {
@@ -9,6 +9,5 @@ async fn main() {
 
     let (service, socket) = LspService::build(BackendHtmx::new).finish();
 
-    serde_json::json!({"test": 20});
     Server::new(stdin, stdout, socket).serve(service).await;
 }

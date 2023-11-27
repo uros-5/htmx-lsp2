@@ -1,3 +1,4 @@
+pub mod htmx_tree_sitter;
+pub mod position;
+pub mod queries;
 pub mod server;
-pub mod tree_sitter_htmx;
-pub mod tree_sitter_queries;

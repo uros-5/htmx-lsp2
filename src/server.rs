@@ -16,7 +16,7 @@ use tower_lsp::lsp_types::{
 use tower_lsp::lsp_types::{InitializeParams, ServerInfo};
 use tower_lsp::{lsp_types::InitializeResult, Client, LanguageServer};
 
-use crate::tree_sitter_htmx::{get_position_from_lsp_completion, Position};
+use crate::position::{get_position_from_lsp_completion, Position, QueryType};
 
 #[derive(Debug)]
 pub struct BackendHtmx {
@@ -95,17 +95,9 @@ impl LanguageServer for BackendHtmx {
         .await
     }
 
-    async fn did_save(&self, _: DidSaveTextDocumentParams) {
-        self.client
-            .log_message(MessageType::INFO, "file saved!")
-            .await;
-    }
+    async fn did_save(&self, _: DidSaveTextDocumentParams) {}
 
-    async fn did_close(&self, _: DidCloseTextDocumentParams) {
-        self.client
-            .log_message(MessageType::INFO, "file closed!")
-            .await;
-    }
+    async fn did_close(&self, _: DidCloseTextDocumentParams) {}
 
     async fn did_change(&self, mut params: DidChangeTextDocumentParams) {
         if let Some(text) = params.content_changes.first_mut() {
@@ -142,6 +134,7 @@ impl LanguageServer for BackendHtmx {
             &params.text_document_position,
             &self.document_map,
             uri.to_string(),
+            QueryType::Completion,
         );
         if let Some(result) = result {
             match result {
@@ -160,11 +153,7 @@ impl LanguageServer for BackendHtmx {
                         return Ok(Some(ret).map(CompletionResponse::Array));
                     }
                 }
-                Position::AttributeValue { name, value } => {
-                    let len = self.hx_attribute_values.len();
-                    let msg = format!("{}, {}, {}", &name, &value, len);
-                    self.client.log_message(MessageType::INFO, msg).await;
-
+                Position::AttributeValue { name, .. } => {
                     if let Some(completions) = self.hx_attribute_values.get(&name) {
                         let mut ret = Vec::with_capacity(completions.len());
                         for item in completions {
@@ -183,7 +172,6 @@ impl LanguageServer for BackendHtmx {
                 }
             }
         }
-        self.client.log_message(MessageType::INFO, "nista :(").await;
         Ok(None)
     }
 
@@ -193,15 +181,12 @@ impl LanguageServer for BackendHtmx {
             &params.text_document_position_params,
             &self.document_map,
             uri.to_string(),
+            QueryType::Hover,
         );
 
         if let Some(result) = result {
             match result {
                 Position::AttributeName(name) => {
-                    self.client
-                        .log_message(MessageType::INFO, "attribute name!")
-                        .await;
-
                     if let Some(res) = self
                         .hx_tags
                         .iter()
@@ -271,53 +256,35 @@ pub fn create_basic_compls() -> Vec<HxCompletion> {
         ("target", include_str!("./md/attributes/hx-target.md")),
         ("trigger", include_str!("./md/attributes/hx-trigger.md")),
         ("vals", include_str!("./md/attributes/hx-vals.md")),
-        (
-            "hx-push-url",
-            include_str!("./md/attributes/hx-push-url.md"),
-        ),
+        ("push-url", include_str!("./md/attributes/hx-push-url.md")),
         ("select", include_str!("./md/attributes/hx-select.md")),
         ("ext", include_str!("./md/attributes/hx-ext.md")),
         ("on", include_str!("./md/attributes/hx-on.md")),
         (
-            "hx-select-oob",
+            "select-oob",
             include_str!("./md/attributes/hx-select-oob.md"),
         ),
-        (
-            "hx-swap-oob",
-            include_str!("./md/attributes/hx-swap-oob.md"),
-        ),
+        ("swap-oob", include_str!("./md/attributes/hx-swap-oob.md")),
         ("confirm", include_str!("./md/attributes/hx-confirm.md")),
         ("disable", include_str!("./md/attributes/hx-disable.md")),
-        (
-            "hx-encoding",
-            include_str!("./md/attributes/hx-encoding.md"),
-        ),
+        ("encoding", include_str!("./md/attributes/hx-encoding.md")),
         ("headers", include_str!("./md/attributes/hx-headers.md")),
         ("history", include_str!("./md/attributes/hx-history.md")),
         (
-            "hx-history-elt",
+            "history-elt",
             include_str!("./md/attributes/hx-history-elt.md"),
         ),
-        (
-            "hx-indicator",
-            include_str!("./md/attributes/hx-indicator.md"),
-        ),
+        ("indicator", include_str!("./md/attributes/hx-indicator.md")),
         ("params", include_str!("./md/attributes/hx-params.md")),
-        (
-            "hx-preserve",
-            include_str!("./md/attributes/hx-preserve.md"),
-        ),
+        ("preserve", include_str!("./md/attributes/hx-preserve.md")),
         ("prompt", include_str!("./md/attributes/hx-prompt.md")),
         (
-            "hx-replace-url",
+            "replace-url",
             include_str!("./md/attributes/hx-replace-url.md"),
         ),
         ("request", include_str!("./md/attributes/hx-request.md")),
         ("sync", include_str!("./md/attributes/hx-sync.md")),
-        (
-            "hx-validate",
-            include_str!("./md/attributes/hx-validate.md"),
-        ),
+        ("validate", include_str!("./md/attributes/hx-validate.md")),
     ];
 
     to_hx_completion(values)
