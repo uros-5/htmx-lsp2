@@ -215,7 +215,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "htmx-lsp"
+name = "htmx-ai"
 version = "0.1.0"
 dependencies = [
  "dashmap",

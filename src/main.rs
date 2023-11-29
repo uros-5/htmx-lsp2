@@ -1,4 +1,4 @@
-use htmx_lsp::server::BackendHtmx;
+use htmx_ai::server::BackendHtmx;
 use tower_lsp::{LspService, Server};
 #[tokio::main]
 async fn main() {

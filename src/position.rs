@@ -122,9 +122,7 @@ fn query_name(
 ) -> Option<Position> {
     let props = query_props(element, source, trigger_point, HX_NAME);
     let attr_name = props.get("attr_name")?;
-    // for i in &props {
-    //     dbg!(i);
-    // }
+    // dbg_props(&props);
 
     if let Some(unfinished_tag) = props.get("unfinished_tag") {
         if query_type == &QueryType::Hover {
@@ -154,9 +152,7 @@ fn query_value(
     query_type: &QueryType,
 ) -> Option<Position> {
     let props = query_props(element, source, trigger_point, HX_VALUE);
-    // for i in &props {
-    //     dbg!(i);
-    // }
+    // dbg_props(&props);
 
     let attr_name = props.get("attr_name")?;
     let mut value = String::new();
@@ -196,6 +192,13 @@ fn query_value(
         name: attr_name.value.to_owned(),
         value,
     })
+}
+
+#[allow(dead_code)]
+fn dbg_props(props: &HashMap<String, CaptureDetails>) {
+    for i in props {
+        dbg!(i);
+    }
 }
 
 pub fn completion_position(props: HashMap<String, CaptureDetails>) -> Option<Position> {
