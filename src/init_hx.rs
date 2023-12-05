@@ -1,5 +1,99 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde_json::Value;
+use std::{
+    collections::HashMap,
+    fs::read_to_string,
+    sync::{Arc, Mutex, RwLock},
+};
+
+use crate::{
+    htmx_tree_sitter::LspFiles,
+    server::{ConfigError, HtmxConfig},
+};
+
+pub fn config_validate(config: Option<Value>) -> Option<HtmxConfig> {
+    if let Some(config) = config {
+        if let Ok(config) = serde_json::from_value::<HtmxConfig>(config) {
+            return Some(config);
+        }
+    }
+    None
+}
+
+pub fn client_config(
+    config: &RwLock<Option<HtmxConfig>>,
+    lsp_files: &Arc<Mutex<LspFiles>>,
+) -> Result<(), ConfigError> {
+    if let Ok(config) = config.read() {
+        if let Some(config) = config.as_ref().filter(|_| true) {
+            if config.template_ext.is_empty() || config.template_ext.contains(' ') {
+                return Err(ConfigError::TemplateExtension);
+            } else if config.lang != "rust" {
+                return Err(ConfigError::LanguageSupport(String::from(&config.lang)));
+            }
+            let lsp_files = lsp_files.lock().unwrap();
+            let directories = [&config.templates, &config.js_tags, &config.backend_tags];
+            for (index, dir) in directories.iter().enumerate() {
+                let lang_type = LangType::from(index);
+                for file in dir.iter() {
+                    for entry in walkdir::WalkDir::new(file) {
+                        if let Ok(entry) = &entry {
+                            if let Ok(metadata) = &entry.metadata() {
+                                if metadata.is_file() {
+                                    let path = &entry.path();
+                                    let ext = path.extension().is_some_and(|x| {
+                                        return match x.to_str() {
+                                            Some(e) => {
+                                                return match e {
+                                                    "js" | "ts" => {
+                                                        lang_type == LangType::JavaScript
+                                                    }
+                                                    backend if backend == config.lang => {
+                                                        lang_type == LangType::Backend
+                                                    }
+                                                    template if template == config.template_ext => {
+                                                        lang_type == LangType::Template
+                                                    }
+                                                    _ => false,
+                                                };
+                                            }
+                                            None => false,
+                                        };
+                                    });
+                                    if !ext {
+                                        continue;
+                                    }
+                                    if let Ok(name) = std::fs::canonicalize(path) {
+                                        if let Some(name) = name.to_str() {
+                                            if let Some(index) =
+                                                lsp_files.add_file(format!("file://{}", name))
+                                            {
+                                                let _ = read_to_string(name).is_ok_and(|f| {
+                                                    lsp_files.add_tree(index, Some(lang_type), &f);
+                                                    true
+                                                });
+                                            }
+                                        }
+                                    } else {
+                                        dbg!("error");
+                                    }
+                                }
+                            }
+                        } else {
+                            return Err(ConfigError::TemplatePath(String::from(file)));
+                        }
+                    }
+                }
+            }
+            dbg!("okay");
+            Ok(())
+        } else {
+            Err(ConfigError::ConfigNotFound)
+        }
+    } else {
+        Err(ConfigError::ConfigNotFound)
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HxCompletion {
@@ -203,4 +297,27 @@ pub fn init_hx_values() -> HashMap<String, Vec<HxCompletion>> {
     hm.insert(String::from("hx-sync"), hx_sync);
 
     hm
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ChannelMsg {
+    InitTreeSitter,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LangType {
+    Template,
+    JavaScript,
+    Backend,
+}
+
+impl From<usize> for LangType {
+    fn from(value: usize) -> Self {
+        match value {
+            0 => LangType::Template,
+            1 => LangType::JavaScript,
+            2 => LangType::Backend,
+            _ => LangType::Backend,
+        }
+    }
 }

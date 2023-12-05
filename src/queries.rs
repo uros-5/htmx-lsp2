@@ -70,3 +70,60 @@ pub static HX_VALUE: &str = r#"
 
         (#match? @attr_name "hx-.*")
 )"#;
+
+pub static HX_RUST_TAGS: &str = r#"
+(
+  [
+    (
+        (function_item
+            (block
+                (line_comment) @fn_comment
+            )
+        )
+
+    )
+
+    (
+      (closure_expression
+          (block
+              (line_comment) @fn_comment
+          )
+      )
+    )
+
+  ]
+
+	(#match? @fn_comment " hx@.*")
+)
+"#;
+pub static HX_JS_TAGS: &str = r#"
+(
+	[
+      (function_declaration
+          (statement_block
+          	(comment) @js_comment
+          )
+      ) 
+      
+      (arrow_function
+        (statement_block
+          (comment) @js_comment
+        )
+      ) 
+    ]
+    
+    (#match? @js_comment " hx@")
+)
+"#;
+pub static HX_HTML: &str = r#"
+(
+	(attribute
+    	(attribute_name) @attr_name
+        (quoted_attribute_value
+        	(attribute_value) @attr_value
+        	)
+    )
+    
+    (#match? @attr_name "A")
+)
+"#;

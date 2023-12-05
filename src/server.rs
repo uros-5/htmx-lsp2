@@ -1,30 +1,38 @@
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, Mutex, RwLock};
+
+use std::time::Duration;
+use thiserror::Error;
 
 use dashmap::DashMap;
 use ropey::Rope;
-use tower_lsp::jsonrpc::Result;
+use serde::{Deserialize, Serialize};
+
+use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::{
-    CompletionContext, CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams,
-    CompletionResponse, CompletionTriggerKind, DidChangeTextDocumentParams,
-    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams, Hover,
-    HoverContents, HoverParams, HoverProviderCapability, InitializedParams, MarkupContent,
-    MarkupKind, MessageType, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
-    Url,
+    CodeActionProviderCapability, CompletionContext, CompletionItem, CompletionItemKind,
+    CompletionOptions, CompletionParams, CompletionResponse, CompletionTriggerKind, Diagnostic,
+    DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, DidSaveTextDocumentParams, GotoDefinitionParams,
+    GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
+    InitializedParams, MarkupContent, MarkupKind, MessageType, OneOf, Position as PositionType,
+    Range, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
 };
 use tower_lsp::lsp_types::{InitializeParams, ServerInfo};
 use tower_lsp::{lsp_types::InitializeResult, Client, LanguageServer};
 
-use crate::init_hx::{init_hx_tags, init_hx_values, HxCompletion};
+use crate::htmx_tree_sitter::LspFiles;
+use crate::init_hx::{client_config, config_validate, init_hx_tags, init_hx_values, HxCompletion};
 use crate::position::{get_position_from_lsp_completion, Position, QueryType};
 
-#[derive(Debug)]
 pub struct BackendHtmx {
     client: Client,
     document_map: DashMap<String, Rope>,
     hx_tags: Vec<HxCompletion>,
     hx_attribute_values: HashMap<String, Vec<HxCompletion>>,
     is_helix: RwLock<bool>,
+    htmx_config: RwLock<Option<HtmxConfig>>,
+    lsp_files: Arc<Mutex<LspFiles>>,
 }
 
 impl BackendHtmx {
@@ -35,25 +43,72 @@ impl BackendHtmx {
             hx_tags: init_hx_tags(),
             hx_attribute_values: init_hx_values(),
             is_helix: RwLock::new(false),
+            htmx_config: RwLock::new(None),
+            lsp_files: Arc::new(Mutex::new(LspFiles::default())),
         }
     }
     async fn on_change(&self, params: TextDocumentItem) {
         let rope = ropey::Rope::from_str(&params.text);
         self.document_map
             .insert(params.uri.to_string(), rope.clone());
+        let _ = self.lsp_files.lock().is_ok_and(|lsp_files| {
+            let index = lsp_files.get_index(&params.uri.to_string());
+            let _ = index.is_some_and(|index| {
+                lsp_files.add_tree(index, None, &params.text);
+                false
+            });
+            false
+        });
+    }
+
+    async fn _config_error(&self, url: Url) {
+        let cli = self.client.clone();
+        let _ = tokio::spawn(async move {
+            let pos = PositionType::new(0, 0);
+            let diag = Diagnostic {
+                range: Range::new(pos, pos),
+                severity: Some(DiagnosticSeverity::WARNING),
+                message: String::from("test"),
+                ..Default::default()
+            };
+            let diags = vec![diag];
+            cli.publish_diagnostics(url, diags, None).await;
+            std::thread::sleep(Duration::from_secs(2));
+        })
+        .await;
     }
 }
 
 #[tower_lsp::async_trait]
 impl LanguageServer for BackendHtmx {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        let mut definition_provider = None;
+        let mut references_provider = None;
+        let mut code_action_provider = None;
         if let Some(client_info) = params.client_info {
             if client_info.name == "helix" {
-                if let Ok(mut w) = self.is_helix.write() {
-                    *w = true;
+                if let Ok(mut is_helix) = self.is_helix.write() {
+                    *is_helix = true;
                 }
             }
         }
+        match config_validate(params.initialization_options) {
+            Some(htmx_config) => {
+                let _ = self.htmx_config.try_write().is_ok_and(|mut config| {
+                    definition_provider = Some(OneOf::Left(true));
+                    references_provider = Some(OneOf::Left(true));
+                    code_action_provider = Some(CodeActionProviderCapability::Simple(true));
+                    *config = Some(htmx_config);
+                    true
+                });
+            }
+            None => {
+                self.client
+                    .log_message(MessageType::INFO, "Config not found")
+                    .await;
+            }
+        }
+
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -71,10 +126,13 @@ impl LanguageServer for BackendHtmx {
                     completion_item: None,
                 }),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                definition_provider,
+                references_provider,
+                code_action_provider,
                 ..ServerCapabilities::default()
             },
             server_info: Some(ServerInfo {
-                name: String::from("fakehtmx"),
+                name: String::from("htmx-lsp"),
                 version: Some(String::from("0.0.1")),
             }),
             offset_encoding: None,
@@ -85,14 +143,19 @@ impl LanguageServer for BackendHtmx {
         self.client
             .log_message(MessageType::INFO, "initialized!")
             .await;
+        if let Err(err) = client_config(&self.htmx_config, &self.lsp_files) {
+            let msg = err.to_string();
+            self.client.log_message(MessageType::INFO, msg).await;
+        }
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        let _temp_uri = params.text_document.uri.clone();
         self.on_change(TextDocumentItem {
             uri: params.text_document.uri,
             text: params.text_document.text,
         })
-        .await
+        .await;
     }
 
     async fn did_save(&self, _: DidSaveTextDocumentParams) {}
@@ -225,6 +288,27 @@ impl LanguageServer for BackendHtmx {
         Ok(None)
     }
 
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let tree = self.lsp_files.lock().is_ok_and(|lsp_files| {
+            let index = lsp_files.get_index(
+                &params
+                    .text_document_position_params
+                    .text_document
+                    .uri
+                    .to_string(),
+            );
+            index.is_some_and(|index| {
+                let tree = lsp_files.get_tree(index);
+                true
+            });
+            true
+        });
+        Err(Error::method_not_found())
+    }
+
     async fn shutdown(&self) -> Result<()> {
         Ok(())
     }
@@ -233,4 +317,25 @@ impl LanguageServer for BackendHtmx {
 struct TextDocumentItem {
     uri: Url,
     text: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct HtmxConfig {
+    pub lang: String,
+    pub template_ext: String,
+    pub templates: Vec<String>,
+    pub js_tags: Vec<String>,
+    pub backend_tags: Vec<String>,
+}
+
+#[derive(Error, Debug)]
+pub enum ConfigError {
+    #[error("Template path: {0} does not exist")]
+    TemplatePath(String),
+    #[error("Language {0} is not supported")]
+    LanguageSupport(String),
+    #[error("Template extension is empty")]
+    TemplateExtension,
+    #[error("Config is not found")]
+    ConfigNotFound,
 }
