@@ -77,7 +77,7 @@ pub static HX_RUST_TAGS: &str = r#"
     (
         (function_item
             (block
-                (line_comment) @fn_comment
+                (line_comment) @hx_comment
             )
         )
 
@@ -86,14 +86,14 @@ pub static HX_RUST_TAGS: &str = r#"
     (
       (closure_expression
           (block
-              (line_comment) @fn_comment
+              (line_comment) @hx_comment
           )
       )
     )
 
   ]
 
-	(#match? @fn_comment " hx@.*")
+	(#match? @hx_comment " hx@.*")
 )
 "#;
 pub static HX_JS_TAGS: &str = r#"
@@ -101,18 +101,18 @@ pub static HX_JS_TAGS: &str = r#"
 	[
       (function_declaration
           (statement_block
-          	(comment) @js_comment
+          	(comment) @hx_comment
           )
       ) 
       
       (arrow_function
         (statement_block
-          (comment) @js_comment
+          (comment) @hx_comment
         )
       ) 
     ]
     
-    (#match? @js_comment " hx@")
+    (#match? @hx_comment " hx@")
 )
 "#;
 pub static HX_HTML: &str = r#"

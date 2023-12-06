@@ -1,11 +1,17 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use dashmap::DashMap;
 use ropey::Rope;
 use tower_lsp::lsp_types::TextDocumentPositionParams;
 use tree_sitter::{Node, Parser, Point, Query, QueryCursor};
 
-use crate::queries::{HX_NAME, HX_VALUE};
+use crate::{
+    htmx_tree_sitter::LspFiles,
+    queries::{HX_NAME, HX_VALUE},
+};
 
 #[derive(PartialEq, Eq)]
 pub enum QueryType {
@@ -15,8 +21,8 @@ pub enum QueryType {
 
 #[derive(Debug)]
 pub struct CaptureDetails {
-    value: String,
-    end_position: Point,
+    pub value: String,
+    pub end_position: Point,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -30,23 +36,36 @@ pub fn get_position_from_lsp_completion(
     text: &DashMap<String, Rope>,
     uri: String,
     query_type: QueryType,
+    lsp_files: &Arc<Mutex<LspFiles>>,
 ) -> Option<Position> {
     let text = text.get(&uri)?;
     let text = text.to_string();
     let pos = text_params.position;
 
-    // TODO: Gallons of perf work can be done starting here
-    let mut parser = Parser::new();
+    if let Ok(parser) = lsp_files.lock() {
+        if let Some(index) = parser.get_index(&uri) {
+            parser.add_tree(index, None, &text, None);
+            if let Some(tree) = parser.get_tree(index) {
+                let root_node = tree.0.root_node();
+                let trigger_point = Point::new(pos.line as usize, pos.character as usize);
 
-    parser
-        .set_language(tree_sitter_html::language())
-        .expect("could not load html grammer");
+                return query_position(root_node, &text, trigger_point, query_type);
+            }
+        }
+    }
+    None
+    // // TODO: Gallons of perf work can be done starting here
+    // let mut parser = Parser::new();
 
-    let tree = parser.parse(&text, None)?;
-    let root_node = tree.root_node();
-    let trigger_point = Point::new(pos.line as usize, pos.character as usize);
+    // parser
+    //     .set_language(tree_sitter_html::language())
+    //     .expect("could not load html grammer");
 
-    query_position(root_node, &text, trigger_point, query_type)
+    // let tree = parser.parse(&text, None)?;
+    // let root_node = tree.root_node();
+    // let trigger_point = Point::new(pos.line as usize, pos.character as usize);
+
+    // query_position(root_node, &text, trigger_point, query_type)
 }
 
 fn query_props(
@@ -56,7 +75,7 @@ fn query_props(
     query: &str,
 ) -> HashMap<String, CaptureDetails> {
     let query = Query::new(tree_sitter_html::language(), query)
-        .unwrap_or_else(|_| panic!("get_position_by_query invalid query {QUICK_QUERY}"));
+        .unwrap_or_else(|_| panic!("get_position_by_query invalid query"));
     let mut cursor_qry = QueryCursor::new();
 
     let capture_names = query.capture_names();
@@ -109,6 +128,8 @@ pub fn query_position(
 
     let name = query_name(element, source, trigger_point, &query_type);
     if name.is_some() {
+        drop(root);
+        drop(element);
         return name;
     }
     query_value(element, source, trigger_point, &query_type)
@@ -184,7 +205,10 @@ fn query_value(
             return None;
         }
         if query_type == &QueryType::Hover {
-            value = props.get("attr_value").unwrap().value.to_string();
+            let _ = props.get("attr_value").is_some_and(|s| {
+                value = s.value.to_string();
+                true
+            });
         }
     }
 

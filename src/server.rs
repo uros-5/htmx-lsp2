@@ -1,12 +1,11 @@
+use crate::config::{read_config, validate_config, HtmxConfig};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
 use std::time::Duration;
-use thiserror::Error;
 
 use dashmap::DashMap;
 use ropey::Rope;
-use serde::{Deserialize, Serialize};
 
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::{
@@ -22,7 +21,7 @@ use tower_lsp::lsp_types::{InitializeParams, ServerInfo};
 use tower_lsp::{lsp_types::InitializeResult, Client, LanguageServer};
 
 use crate::htmx_tree_sitter::LspFiles;
-use crate::init_hx::{client_config, config_validate, init_hx_tags, init_hx_values, HxCompletion};
+use crate::init_hx::{init_hx_tags, init_hx_values, HxCompletion};
 use crate::position::{get_position_from_lsp_completion, Position, QueryType};
 
 pub struct BackendHtmx {
@@ -47,35 +46,33 @@ impl BackendHtmx {
             lsp_files: Arc::new(Mutex::new(LspFiles::default())),
         }
     }
+
     async fn on_change(&self, params: TextDocumentItem) {
+        self.config_error(params.uri.clone());
         let rope = ropey::Rope::from_str(&params.text);
         self.document_map
             .insert(params.uri.to_string(), rope.clone());
         let _ = self.lsp_files.lock().is_ok_and(|lsp_files| {
             let index = lsp_files.get_index(&params.uri.to_string());
             let _ = index.is_some_and(|index| {
-                lsp_files.add_tree(index, None, &params.text);
-                false
+                lsp_files.add_tree(index, None, &params.text, None);
+                true
             });
-            false
+            true
         });
     }
 
-    async fn _config_error(&self, url: Url) {
-        let cli = self.client.clone();
-        let _ = tokio::spawn(async move {
-            let pos = PositionType::new(0, 0);
-            let diag = Diagnostic {
-                range: Range::new(pos, pos),
-                severity: Some(DiagnosticSeverity::WARNING),
-                message: String::from("test"),
-                ..Default::default()
-            };
-            let diags = vec![diag];
-            cli.publish_diagnostics(url, diags, None).await;
-            std::thread::sleep(Duration::from_secs(2));
-        })
-        .await;
+    async fn config_error(&self, url: Url) {
+        let pos = PositionType::new(0, 0);
+        let diag = Diagnostic {
+            range: Range::new(pos, pos),
+            severity: Some(DiagnosticSeverity::WARNING),
+            message: String::from("test"),
+            ..Default::default()
+        };
+        let diags = vec![diag];
+        self.client.publish_diagnostics(url, diags, None).await;
+        std::thread::sleep(Duration::from_secs(2));
     }
 }
 
@@ -92,7 +89,7 @@ impl LanguageServer for BackendHtmx {
                 }
             }
         }
-        match config_validate(params.initialization_options) {
+        match validate_config(params.initialization_options) {
             Some(htmx_config) => {
                 let _ = self.htmx_config.try_write().is_ok_and(|mut config| {
                     definition_provider = Some(OneOf::Left(true));
@@ -133,7 +130,7 @@ impl LanguageServer for BackendHtmx {
             },
             server_info: Some(ServerInfo {
                 name: String::from("htmx-lsp"),
-                version: Some(String::from("0.0.1")),
+                version: Some(String::from("0.1.2")),
             }),
             offset_encoding: None,
         })
@@ -143,7 +140,7 @@ impl LanguageServer for BackendHtmx {
         self.client
             .log_message(MessageType::INFO, "initialized!")
             .await;
-        if let Err(err) = client_config(&self.htmx_config, &self.lsp_files) {
+        if let Err(err) = read_config(&self.htmx_config, &self.lsp_files) {
             let msg = err.to_string();
             self.client.log_message(MessageType::INFO, msg).await;
         }
@@ -154,6 +151,7 @@ impl LanguageServer for BackendHtmx {
         self.on_change(TextDocumentItem {
             uri: params.text_document.uri,
             text: params.text_document.text,
+            range: None,
         })
         .await;
     }
@@ -166,6 +164,7 @@ impl LanguageServer for BackendHtmx {
         if let Some(text) = params.content_changes.first_mut() {
             self.on_change(TextDocumentItem {
                 uri: params.text_document.uri,
+                range: text.range,
                 text: std::mem::take(&mut text.text),
             })
             .await
@@ -198,6 +197,7 @@ impl LanguageServer for BackendHtmx {
             &self.document_map,
             uri.to_string(),
             QueryType::Completion,
+            &self.lsp_files,
         );
         if let Some(result) = result {
             match result {
@@ -243,6 +243,7 @@ impl LanguageServer for BackendHtmx {
             &self.document_map,
             uri.to_string(),
             QueryType::Hover,
+            &self.lsp_files,
         );
 
         if let Some(result) = result {
@@ -317,25 +318,5 @@ impl LanguageServer for BackendHtmx {
 struct TextDocumentItem {
     uri: Url,
     text: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct HtmxConfig {
-    pub lang: String,
-    pub template_ext: String,
-    pub templates: Vec<String>,
-    pub js_tags: Vec<String>,
-    pub backend_tags: Vec<String>,
-}
-
-#[derive(Error, Debug)]
-pub enum ConfigError {
-    #[error("Template path: {0} does not exist")]
-    TemplatePath(String),
-    #[error("Language {0} is not supported")]
-    LanguageSupport(String),
-    #[error("Template extension is empty")]
-    TemplateExtension,
-    #[error("Config is not found")]
-    ConfigNotFound,
+    range: Option<Range>,
 }
