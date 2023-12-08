@@ -1,4 +1,3 @@
-
 use tree_sitter::Point;
 
 use crate::position::PositionDefinition;
@@ -12,21 +11,10 @@ pub struct Tag {
     pub line: usize,
 }
 
-impl Tag {
-    pub fn set_file(&mut self, index: usize) {
-        self.file = index;
-    }
-
-    pub fn set_line(&mut self, line: usize) {
-        self.line = line;
-    }
-}
-
 pub fn in_tag(line: &str, point: Point) -> Option<Tag> {
-    if let Some(tag) = get_tag(line) {
-        if point.column >= tag.start && point.column <= tag.end {
-            return Some(tag);
-        }
+    let tag = get_tag(line)?;
+    if point.column >= tag.start && point.column <= tag.end {
+        return Some(tag);
     }
     None
 }
@@ -34,23 +22,19 @@ pub fn in_tag(line: &str, point: Point) -> Option<Tag> {
 pub fn get_tag(line: &str) -> Option<Tag> {
     let parts = line.split("hx@");
     let mut first = parts.filter(|data| !data.contains(' '));
-    if let Some(first) = first.next() {
-        let mut parts = first.split(' ');
-        if let Some(first) = parts.next() {
-            let full = format!("hx@{}", &first);
-            if let Some(start) = line.find(&full) {
-                let end = start + 2 + first.len();
-                return Some(Tag {
-                    name: first.to_string(),
-                    start,
-                    end,
-                    file: 0,
-                    line: 0,
-                });
-            }
-        }
-    }
-    None
+    let first = first.next()?;
+    let mut parts = first.split(' ');
+    let first = parts.next()?;
+    let full = format!("hx@{}", &first);
+    let start = line.find(&full)?;
+    let end = start + 2 + first.len();
+    Some(Tag {
+        name: first.to_string(),
+        start,
+        end,
+        file: 0,
+        line: 0,
+    })
 }
 
 pub fn get_tags(value: &str, mut start_char: usize, line: usize) -> Option<Vec<Tag>> {
@@ -76,13 +60,13 @@ pub fn get_tags(value: &str, mut start_char: usize, line: usize) -> Option<Vec<T
 }
 
 pub fn in_tags(value: &str, definition: PositionDefinition) -> Option<Tag> {
-    if let Some(tags) = get_tags(value, definition.start, definition.line) {
-        for tag in tags {
-            let t = definition.point.column >= tag.start && definition.point.column <= tag.end;
-            if t {
-                return Some(tag);
-            }
+    let tags = get_tags(value, definition.start, definition.line)?;
+    for tag in tags {
+        let t = definition.point.column >= tag.start && definition.point.column <= tag.end;
+        if t {
+            return Some(tag);
         }
     }
+
     None
 }

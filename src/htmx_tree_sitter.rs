@@ -11,17 +11,18 @@ use dashmap::{
 };
 use ropey::Rope;
 use tower_lsp::lsp_types::{
-    Diagnostic, DiagnosticSeverity, GotoDefinitionResponse, Location, Position, Range, Url,
+    Diagnostic, DiagnosticSeverity, GotoDefinitionParams, GotoDefinitionResponse, Location,
+    Position, Range, ReferenceParams, Url,
 };
 use tree_sitter::{Parser, Point, Query, Tree};
 
 use crate::{
-    config::{file_ext, HtmxConfig},
+    config::HtmxConfig,
     htmx_tags::{in_tags, Tag},
     init_hx::LangType,
-    position::{PositionDefinition, QueryType},
-    queries::{HX_HTML, HX_JS_TAGS, HX_NAME, HX_RUST_TAGS, HX_VALUE},
-    query_helper::{query_tag, HtmxQuery, Queries},
+    position::{query_position, Position as PositionType, PositionDefinition, QueryType},
+    queries::{HX_JS_TAGS, HX_RUST_TAGS},
+    query_helper::{query_tag, HTMLQueries as HTMLQueries2, HtmxQuery, Queries},
     server::{LocalWriter, ServerTextDocumentItem},
 };
 
@@ -146,6 +147,56 @@ impl LspFiles {
         }
     }
 
+    pub fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+        config: &RwLock<Option<HtmxConfig>>,
+        document_map: &DashMap<String, Rope>,
+        query: &HTMLQueries2,
+        // res: tower_lsp::jsonrpc::Result<Option<GotoDefinitionResponse>>,
+    ) -> Option<PositionType> {
+        let response = None;
+        let file = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .to_string();
+        let ext = config.read().is_ok_and(|config| {
+            if let Some(config) = config.as_ref() {
+                let ext = config.file_ext(Path::new(&file));
+                return ext.is_some_and(|lang_type| lang_type == LangType::Template);
+            }
+            false
+        });
+        if !ext {
+            return None;
+        }
+        let text = {
+            let c = document_map.get(&file)?;
+            let mut w = LocalWriter::default();
+            let _ = c.value().write_to(&mut w);
+            w
+        };
+        let index = self.get_index(&file);
+        if let Some(index) = index {
+            if let Some(tree) = self.get_tree(index) {
+                let root_node = tree.0.root_node();
+                let pos = params.text_document_position_params.position;
+                let trigger_point = Point::new(pos.line as usize, pos.character as usize);
+                return query_position(
+                    root_node,
+                    &text.content,
+                    trigger_point,
+                    QueryType::Definition,
+                    query,
+                );
+            }
+            // res = Ok(self.check_definition(position));
+        }
+        response
+        // drop(lsp_files);
+    }
+
     pub fn goto_definition_response(
         &self,
         definition: Option<PositionDefinition>,
@@ -190,6 +241,7 @@ impl LspFiles {
         });
     }
 
+    #[allow(clippy::result_unit_err)]
     pub fn add_tags_from_file(
         &self,
         index: usize,
@@ -212,7 +264,7 @@ impl LspFiles {
             );
             self.delete_tags_by_index(index);
             for mut tag in tags {
-                tag.set_file(index);
+                tag.file = index;
                 if let Err(tag) = self.add_tag(tag) {
                     diags.push(tag);
                 }
@@ -234,11 +286,10 @@ impl LspFiles {
         let file = self.get_index(uri)?;
         if let Ok(config) = config.read() {
             let config = config.as_ref()?;
-            let lang_type = file_ext(path, config)?;
+            let lang_type = config.file_ext(path)?;
             if lang_type == LangType::Template {
                 return None;
             }
-            let _ext = file_ext(path, config)?;
             let content = document_map.get(uri)?;
             let content = content.value();
             let mut a = LocalWriter::default();
@@ -248,6 +299,38 @@ impl LspFiles {
             return Some(diagnostics.to_vec());
             //
         }
+        None
+    }
+
+    pub fn references(
+        &self,
+        params: ReferenceParams,
+        queries: &Queries,
+        document_map: &DashMap<String, Rope>,
+    ) -> Option<()> {
+        let uri = String::from(&params.text_document_position.text_document.uri.to_string());
+        let point = Point::new(
+            params.text_document_position.position.line as usize,
+            params.text_document_position.position.character as usize,
+        );
+        let index = self.get_index(&uri)?;
+        let tree = self.get_tree(index)?;
+        if let Ok(c) = HtmxQuery::try_from(tree.1) {
+            let query = queries.get(c);
+            let content = document_map.get(&uri)?;
+            let mut w = LocalWriter::default();
+            let _ = content.value().write_to(&mut w);
+            drop(content);
+            let _tags = query_tag(
+                tree.0.root_node(),
+                &w.content,
+                point,
+                &QueryType::Completion,
+                query,
+                false,
+            );
+        }
+        //
         None
     }
 
@@ -306,23 +389,23 @@ impl Clone for Parsers {
     }
 }
 
-pub struct HTMLQueries {
-    lsp: Query,
-    name: Query,
-    value: Query,
-}
+// pub struct HTMLQueries {
+//     lsp: Query,
+//     name: Query,
+//     value: Query,
+// }
 
-impl Default for HTMLQueries {
-    fn default() -> Self {
-        let lsp = Query::new(tree_sitter_html::language(), HX_HTML).unwrap();
-        let name = Query::new(tree_sitter_html::language(), HX_NAME).unwrap();
-        let value = Query::new(tree_sitter_html::language(), HX_VALUE).unwrap();
-        Self { lsp, name, value }
-    }
-}
+// impl Default for HTMLQueries {
+//     fn default() -> Self {
+//         let lsp = Query::new(tree_sitter_html::language(), HX_HTML).unwrap();
+//         let name = Query::new(tree_sitter_html::language(), HX_NAME).unwrap();
+//         let value = Query::new(tree_sitter_html::language(), HX_VALUE).unwrap();
+//         Self { lsp, name, value }
+//     }
+// }
 
-pub enum HTMLQuery {
-    Lsp,
-    Name,
-    Value,
-}
+// pub enum HTMLQuery {
+//     Lsp,
+//     Name,
+//     Value,
+// }

@@ -22,10 +22,23 @@ pub struct HtmxConfig {
 }
 
 impl HtmxConfig {
-    pub fn ext(&self, ext: &str) -> bool {
+    pub fn is_backend(&self, ext: &str) -> bool {
         match self.lang.as_str() {
             "rust" => ext == "rs",
+            "python" => ext == "py",
             _ => false,
+        }
+    }
+
+    pub fn file_ext(&self, path: &Path) -> Option<LangType> {
+        match path.extension()?.to_str() {
+            Some(e) => match e {
+                "js" | "ts" => Some(LangType::JavaScript),
+                backend if self.is_backend(backend) => Some(LangType::Backend),
+                template if template == self.template_ext => Some(LangType::Template),
+                _ => None,
+            },
+            None => None,
         }
     }
 }
@@ -79,7 +92,7 @@ fn walkdir(
                     if let Ok(metadata) = &entry.metadata() {
                         if metadata.is_file() {
                             let path = &entry.path();
-                            let ext = file_ext(path, config);
+                            let ext = config.file_ext(path);
                             if !ext.is_some_and(|t| t == lang_type) {
                                 continue;
                             }
@@ -101,18 +114,6 @@ fn walkdir(
         }
     }
     Ok(diagnostics)
-}
-
-pub fn file_ext(path: &Path, config: &HtmxConfig) -> Option<LangType> {
-    match path.extension()?.to_str() {
-        Some(e) => match e {
-            "js" | "ts" => Some(LangType::JavaScript),
-            backend if config.ext(backend) => Some(LangType::Backend),
-            template if template == config.template_ext => Some(LangType::Template),
-            _ => None,
-        },
-        None => None,
-    }
 }
 
 fn add_file(

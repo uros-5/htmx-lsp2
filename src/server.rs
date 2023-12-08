@@ -1,6 +1,6 @@
 use crate::config::{read_config, validate_config, HtmxConfig};
 use crate::htmx_tags::Tag;
-use crate::query_helper::{query_tag, HtmxQuery, Queries};
+use crate::query_helper::Queries;
 use std::collections::HashMap;
 
 use std::path::Path;
@@ -22,21 +22,20 @@ use tower_lsp::lsp_types::{
 };
 use tower_lsp::lsp_types::{InitializeParams, ServerInfo};
 use tower_lsp::{lsp_types::InitializeResult, Client, LanguageServer};
-use tree_sitter::Point;
 
 use crate::htmx_tree_sitter::LspFiles;
 use crate::init_hx::{init_hx_tags, init_hx_values, HxCompletion};
 use crate::position::{get_position_from_lsp_completion, Position, QueryType};
 
 pub struct BackendHtmx {
-    client: Client,
-    document_map: DashMap<String, Rope>,
-    hx_tags: Vec<HxCompletion>,
-    hx_attribute_values: HashMap<String, Vec<HxCompletion>>,
-    is_helix: RwLock<bool>,
-    htmx_config: RwLock<Option<HtmxConfig>>,
-    lsp_files: Arc<Mutex<LspFiles>>,
-    queries: Queries,
+    pub client: Client,
+    pub document_map: DashMap<String, Rope>,
+    pub hx_tags: Vec<HxCompletion>,
+    pub hx_attribute_values: HashMap<String, Vec<HxCompletion>>,
+    pub is_helix: RwLock<bool>,
+    pub htmx_config: RwLock<Option<HtmxConfig>>,
+    pub lsp_files: Arc<Mutex<LspFiles>>,
+    pub queries: Queries,
 }
 
 impl BackendHtmx {
@@ -359,68 +358,27 @@ impl LanguageServer for BackendHtmx {
         &self,
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
-        let mut res = Ok(None);
+        let mut res: Result<Option<GotoDefinitionResponse>> = Ok(None);
         let _tree = self.lsp_files.lock().is_ok_and(|lsp_files| {
-            // TODO self.lsp_files.goto_definition(&file )
-            let file = params
-                .text_document_position_params
-                .text_document
-                .uri
-                .to_string();
-            if !file.ends_with("jinja") {
-                return false;
-            }
-            let index = lsp_files.get_index(&file);
+            let position = lsp_files.goto_definition(
+                params,
+                &self.htmx_config,
+                &self.document_map,
+                &self.queries.html,
+            );
             drop(lsp_files);
-            let _ = index.is_some_and(|_index| {
-                let position = get_position_from_lsp_completion(
-                    &params.text_document_position_params,
-                    &self.document_map,
-                    file,
-                    QueryType::Definition,
-                    &self.lsp_files,
-                    &self.queries.html,
-                );
-                res = Ok(self.check_definition(position));
-                true
-            });
+            res = Ok(self.check_definition(position));
             true
         });
         res
     }
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
-        let uri = String::from(&params.text_document_position.text_document.uri.to_string());
-        let point = Point::new(
-            params.text_document_position.position.line as usize,
-            params.text_document_position.position.character as usize,
-        );
         if let Ok(config) = self.htmx_config.read() {
             if let Some(_a) = config.as_ref() {
-                // TODO lsp_files.
                 let _tree = self.lsp_files.lock().is_ok_and(|lsp_files| {
-                    let file = params.text_document_position.text_document.uri.to_string();
-                    let index = lsp_files.get_index(&file);
-                    if let Some(index) = index {
-                        if let Some(tree) = lsp_files.get_tree(index) {
-                            if let Ok(c) = HtmxQuery::try_from(tree.1) {
-                                let query = self.queries.get(c);
-                                let content = self.document_map.get(&uri).unwrap();
-                                let mut w = LocalWriter::default();
-                                let _ = content.value().write_to(&mut w);
-                                drop(content);
-                                let tags = query_tag(
-                                    tree.0.root_node(),
-                                    &w.content,
-                                    point,
-                                    &QueryType::Completion,
-                                    query,
-                                    false,
-                                );
-                            }
-                        }
-                    }
-                    true
+                    lsp_files.references(params, &self.queries, &self.document_map);
+                    false
                 });
             }
         }

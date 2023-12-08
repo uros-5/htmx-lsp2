@@ -265,7 +265,7 @@ pub fn query_tag(
     let mut tags = vec![];
     for comment in comments {
         if let Some(mut tag) = get_tag(&comment.1.value) {
-            tag.set_line(comment.1.start_position.row);
+            tag.line = comment.1.start_position.row;
             tags.push(tag);
         }
     }

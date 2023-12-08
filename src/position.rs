@@ -74,18 +74,6 @@ pub fn get_position_from_lsp_completion(
         }
     }
     None
-    // // TODO: Gallons of perf work can be done starting here
-    // let mut parser = Parser::new();
-
-    // parser
-    //     .set_language(tree_sitter_html::language())
-    //     .expect("could not load html grammer");
-
-    // let tree = parser.parse(&text, None)?;
-    // let root_node = tree.root_node();
-    // let trigger_point = Point::new(pos.line as usize, pos.character as usize);
-
-    // query_position(root_node, &text, trigger_point, query_type)
 }
 
 fn find_element_referent_to_current_node(node: Node<'_>) -> Option<Node<'_>> {
