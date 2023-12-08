@@ -6,29 +6,48 @@ use std::{
 use dashmap::DashMap;
 use ropey::Rope;
 use tower_lsp::lsp_types::TextDocumentPositionParams;
-use tree_sitter::{Node, Parser, Point, Query, QueryCursor};
+use tree_sitter::{Node, Point};
 
 use crate::{
     htmx_tree_sitter::LspFiles,
-    queries::{HX_NAME, HX_VALUE},
+    query_helper::{query_name, query_value, HTMLQueries, HTMLQuery},
 };
 
 #[derive(PartialEq, Eq)]
 pub enum QueryType {
     Hover,
     Completion,
+    Definition,
 }
 
 #[derive(Debug)]
 pub struct CaptureDetails {
     pub value: String,
     pub end_position: Point,
+    pub start_position: Point,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Position {
     AttributeName(String),
-    AttributeValue { name: String, value: String },
+    AttributeValue {
+        name: String,
+        value: String,
+        definition: Option<PositionDefinition>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PositionDefinition {
+    pub line: usize,
+    pub point: Point,
+    pub start: usize,
+}
+
+impl PositionDefinition {
+    pub fn new(line: usize, start: usize, point: Point) -> Self {
+        Self { line, point, start }
+    }
 }
 
 pub fn get_position_from_lsp_completion(
@@ -37,19 +56,20 @@ pub fn get_position_from_lsp_completion(
     uri: String,
     query_type: QueryType,
     lsp_files: &Arc<Mutex<LspFiles>>,
+    query: &HTMLQueries,
 ) -> Option<Position> {
     let text = text.get(&uri)?;
     let text = text.to_string();
     let pos = text_params.position;
 
-    if let Ok(parser) = lsp_files.lock() {
-        if let Some(index) = parser.get_index(&uri) {
-            parser.add_tree(index, None, &text, None);
-            if let Some(tree) = parser.get_tree(index) {
+    if let Ok(lsp_files) = lsp_files.lock() {
+        if let Some(index) = lsp_files.get_index(&uri) {
+            lsp_files.add_tree(index, None, &text, None);
+            if let Some(tree) = lsp_files.get_tree(index) {
                 let root_node = tree.0.root_node();
                 let trigger_point = Point::new(pos.line as usize, pos.character as usize);
 
-                return query_position(root_node, &text, trigger_point, query_type);
+                return query_position(root_node, &text, trigger_point, query_type, query);
             }
         }
     }
@@ -68,47 +88,6 @@ pub fn get_position_from_lsp_completion(
     // query_position(root_node, &text, trigger_point, query_type)
 }
 
-fn query_props(
-    node: Node<'_>,
-    source: &str,
-    trigger_point: Point,
-    query: &str,
-) -> HashMap<String, CaptureDetails> {
-    let query = Query::new(tree_sitter_html::language(), query)
-        .unwrap_or_else(|_| panic!("get_position_by_query invalid query"));
-    let mut cursor_qry = QueryCursor::new();
-
-    let capture_names = query.capture_names();
-
-    let matches = cursor_qry.matches(&query, node, source.as_bytes());
-
-    matches
-        .into_iter()
-        .flat_map(|m| {
-            m.captures
-                .iter()
-                .filter(|capture| capture.node.start_position() <= trigger_point)
-        })
-        .fold(HashMap::new(), |mut acc, capture| {
-            let key = capture_names[capture.index as usize].to_owned();
-            let value = if let Ok(capture_value) = capture.node.utf8_text(source.as_bytes()) {
-                capture_value.to_owned()
-            } else {
-                "".to_owned()
-            };
-
-            acc.insert(
-                key,
-                CaptureDetails {
-                    value,
-                    end_position: capture.node.end_position(),
-                },
-            );
-
-            acc
-        })
-}
-
 fn find_element_referent_to_current_node(node: Node<'_>) -> Option<Node<'_>> {
     if node.kind() == "element" || node.kind() == "fragment" {
         return Some(node);
@@ -122,100 +101,28 @@ pub fn query_position(
     source: &str,
     trigger_point: Point,
     query_type: QueryType,
+    query: &HTMLQueries,
 ) -> Option<Position> {
     let closest_node = root.descendant_for_point_range(trigger_point, trigger_point)?;
     let element = find_element_referent_to_current_node(closest_node)?;
 
-    let name = query_name(element, source, trigger_point, &query_type);
+    let name = query_name(
+        element,
+        source,
+        trigger_point,
+        &query_type,
+        query.get(HTMLQuery::Name),
+    );
     if name.is_some() {
-        drop(root);
-        drop(element);
         return name;
     }
-    query_value(element, source, trigger_point, &query_type)
-}
-
-fn query_name(
-    element: Node<'_>,
-    source: &str,
-    trigger_point: Point,
-    query_type: &QueryType,
-) -> Option<Position> {
-    let props = query_props(element, source, trigger_point, HX_NAME);
-    let attr_name = props.get("attr_name")?;
-    // dbg_props(&props);
-
-    if let Some(unfinished_tag) = props.get("unfinished_tag") {
-        if query_type == &QueryType::Hover {
-            let complete_match = props.get("complete_match");
-            if complete_match.is_some() && trigger_point <= attr_name.end_position {
-                return Some(Position::AttributeName(attr_name.value.to_string()));
-            }
-            return None;
-        } else if query_type == &QueryType::Completion
-            && trigger_point > unfinished_tag.end_position
-        {
-            return Some(Position::AttributeName(String::from("--")));
-        } else if let Some(_capture) = props.get("equal_error") {
-            if query_type == &QueryType::Completion {
-                return None;
-            }
-        }
-    }
-
-    Some(Position::AttributeName(attr_name.value.to_string()))
-}
-
-fn query_value(
-    element: Node<'_>,
-    source: &str,
-    trigger_point: Point,
-    query_type: &QueryType,
-) -> Option<Position> {
-    let props = query_props(element, source, trigger_point, HX_VALUE);
-    // dbg_props(&props);
-
-    let attr_name = props.get("attr_name")?;
-    let mut value = String::new();
-    let hovered_name = trigger_point < attr_name.end_position && query_type == &QueryType::Hover;
-    if hovered_name {
-        return Some(Position::AttributeName(attr_name.value.to_string()));
-    } else if props.get("open_quote_error").is_some() || props.get("empty_attribute").is_some() {
-        if query_type == &QueryType::Completion {
-            if let Some(quoted) = props.get("quoted_attr_value") {
-                if trigger_point >= quoted.end_position {
-                    return None;
-                }
-            }
-        }
-        return Some(Position::AttributeValue {
-            name: attr_name.value.to_owned(),
-            value: "".to_string(),
-        });
-    }
-
-    if let Some(error_char) = props.get("error_char") {
-        if error_char.value == "=" {
-            return None;
-        }
-    };
-
-    if let Some(capture) = props.get("non_empty_attribute") {
-        if trigger_point >= capture.end_position {
-            return None;
-        }
-        if query_type == &QueryType::Hover {
-            let _ = props.get("attr_value").is_some_and(|s| {
-                value = s.value.to_string();
-                true
-            });
-        }
-    }
-
-    Some(Position::AttributeValue {
-        name: attr_name.value.to_owned(),
-        value,
-    })
+    query_value(
+        element,
+        source,
+        trigger_point,
+        &query_type,
+        query.get(HTMLQuery::Value),
+    )
 }
 
 #[allow(dead_code)]
@@ -236,11 +143,13 @@ pub fn completion_position(props: HashMap<String, CaptureDetails>) -> Option<Pos
         Some(Position::AttributeValue {
             name: attr_name.value.to_string(),
             value: String::new(),
+            definition: None,
         })
     } else if let Some(_capture) = props.get("with_attr_value_not_empty") {
         Some(Position::AttributeValue {
             name: attr_name.value.to_string(),
             value: String::new(),
+            definition: None,
         })
     } else {
         props
@@ -248,6 +157,7 @@ pub fn completion_position(props: HashMap<String, CaptureDetails>) -> Option<Pos
             .map(|_capture| Position::AttributeValue {
                 name: attr_name.value.to_string(),
                 value: String::new(),
+                definition: None,
             })
     }
 }
@@ -267,6 +177,7 @@ pub fn hover_position(
                 return Some(Position::AttributeValue {
                     name: attr_name.value.to_string(),
                     value: capture.value.to_string(),
+                    definition: None,
                 });
             }
         }
@@ -287,6 +198,7 @@ pub fn hover_position(
             Some(capture) => Some(Position::AttributeValue {
                 name: attr_name.value.to_string(),
                 value: capture.value.to_string(),
+                definition: None,
             }),
             None => Some(Position::AttributeName(attr_name.value.to_string())),
         }
@@ -299,7 +211,10 @@ pub fn hover_position(
 mod tests1 {
     use tree_sitter::{Parser, Point};
 
-    use crate::position::{query_position, Position, QueryType};
+    use crate::{
+        position::{query_position, Position, QueryType},
+        query_helper::HTMLQueries,
+    };
 
     fn prepare_tree(text: &str) -> tree_sitter::Tree {
         let language = tree_sitter_html::language();
@@ -318,11 +233,13 @@ mod tests1 {
 
         let tree = prepare_tree(text);
 
+        let query = HTMLQueries::default();
         let matches = query_position(
             tree.root_node(),
             text,
             Point::new(0, 8),
             QueryType::Completion,
+            &query,
         );
         // // Fixes issue with not suggesting hx-* attributes
         // let expected = get_position(tree.root_node(), text, 0, 8);
@@ -337,11 +254,14 @@ mod tests1 {
         let tree = prepare_tree(text);
 
         // let expected = get_position(tree.root_node(), text, 0, 13);
+
+        let query = HTMLQueries::default();
         let matches = query_position(
             tree.root_node(),
             text,
             Point::new(0, 13),
             QueryType::Completion,
+            &query,
         );
 
         // assert_eq!(matches, expected);
@@ -354,11 +274,13 @@ mod tests1 {
 
         let tree = prepare_tree(text);
 
+        let query = HTMLQueries::default();
         let matches = query_position(
             tree.root_node(),
             text,
             Point::new(0, 14),
             QueryType::Completion,
+            &query,
         );
 
         // The new implementation doesn't return incomplete tags as value :)
@@ -368,7 +290,8 @@ mod tests1 {
             matches,
             Some(Position::AttributeValue {
                 name: "hx-swap".to_string(),
-                value: "".to_string()
+                value: "".to_string(),
+                definition: None
             })
         );
     }
@@ -380,18 +303,21 @@ mod tests1 {
 
         let tree = prepare_tree(text);
 
+        let query = HTMLQueries::default();
         let matches = query_position(
             tree.root_node(),
             text,
             Point::new(0, 13),
             QueryType::Completion,
+            &query,
         );
 
         assert_eq!(
             matches,
             Some(Position::AttributeValue {
                 name: "hx-swap".to_string(),
-                value: "".to_string()
+                value: "".to_string(),
+                definition: None
             })
         );
     }
@@ -406,11 +332,13 @@ mod tests1 {
 
         let tree = prepare_tree(text);
 
+        let query = HTMLQueries::default();
         let matches = query_position(
             tree.root_node(),
             text,
             Point::new(1, 23),
             QueryType::Completion,
+            &query,
         );
 
         // The new implementation doesn't return incomplete tags as value :)
@@ -420,7 +348,8 @@ mod tests1 {
             matches,
             Some(Position::AttributeValue {
                 name: "hx-target".to_string(),
-                value: "".to_string()
+                value: "".to_string(),
+                definition: None
             })
         );
     }
@@ -435,11 +364,13 @@ mod tests1 {
 
         let tree = prepare_tree(text);
 
+        let query = HTMLQueries::default();
         let matches = query_position(
             tree.root_node(),
             text,
             Point::new(1, 14),
             QueryType::Completion,
+            &query,
         );
 
         assert_eq!(matches, Some(Position::AttributeName("hx-".to_string())));
@@ -451,11 +382,13 @@ mod tests1 {
 
         let tree = prepare_tree(text);
 
+        let query = HTMLQueries::default();
         let matches = query_position(
             tree.root_node(),
             text,
             Point::new(0, 39),
             QueryType::Completion,
+            &query,
         );
 
         assert_eq!(matches, Some(Position::AttributeName("hx-".to_string())));
@@ -468,18 +401,21 @@ mod tests1 {
 
         let tree = prepare_tree(text);
 
+        let query = HTMLQueries::default();
         let matches = query_position(
             tree.root_node(),
             text,
             Point::new(0, 30),
             QueryType::Completion,
+            &query,
         );
 
         assert_eq!(
             matches,
             Some(Position::AttributeValue {
                 name: "hx-target".to_string(),
-                value: "".to_string()
+                value: "".to_string(),
+                definition: None
             })
         );
     }
@@ -490,18 +426,21 @@ mod tests1 {
 
         let tree = prepare_tree(text);
 
+        let query = HTMLQueries::default();
         let matches = query_position(
             tree.root_node(),
             text,
             Point::new(0, 30),
             QueryType::Completion,
+            &query,
         );
 
         assert_eq!(
             matches,
             Some(Position::AttributeValue {
                 name: "hx-target".to_string(),
-                value: "".to_string()
+                value: "".to_string(),
+                definition: None
             })
         );
     }
@@ -513,11 +452,13 @@ mod tests1 {
 
         let tree = prepare_tree(text);
 
+        let query = HTMLQueries::default();
         let matches = query_position(
             tree.root_node(),
             text,
             Point::new(0, 22),
             QueryType::Completion,
+            &query,
         );
 
         assert_eq!(matches, Some(Position::AttributeName("hx-".to_string())));
@@ -530,11 +471,13 @@ mod tests1 {
 
         let tree = prepare_tree(text);
 
+        let query = HTMLQueries::default();
         let matches = query_position(
             tree.root_node(),
             text,
             Point::new(0, 23),
             QueryType::Completion,
+            &query,
         );
 
         assert_eq!(matches, Some(Position::AttributeName("hx-t".to_string())));
@@ -546,13 +489,21 @@ mod tests1 {
 
         let tree = prepare_tree(text);
 
-        let matches = query_position(tree.root_node(), text, Point::new(0, 35), QueryType::Hover);
+        let query = HTMLQueries::default();
+        let matches = query_position(
+            tree.root_node(),
+            text,
+            Point::new(0, 35),
+            QueryType::Hover,
+            &query,
+        );
 
         assert_eq!(
             matches,
             Some(Position::AttributeValue {
                 name: "hx-target".to_string(),
-                value: "find ".to_string()
+                value: "find ".to_string(),
+                definition: None
             })
         );
     }
@@ -563,7 +514,14 @@ mod tests1 {
 
         let tree = prepare_tree(text);
 
-        let matches = query_position(tree.root_node(), text, Point::new(0, 24), QueryType::Hover);
+        let query = HTMLQueries::default();
+        let matches = query_position(
+            tree.root_node(),
+            text,
+            Point::new(0, 24),
+            QueryType::Hover,
+            &query,
+        );
 
         assert_eq!(matches, None);
     }
@@ -597,13 +555,14 @@ mod tests1 {
         for case in cases {
             let text = case.0;
             let tree = prepare_tree(text);
-            let matches = query_position(tree.root_node(), text, case.1, QueryType::Hover);
+            let query = HTMLQueries::default();
+            let matches = query_position(tree.root_node(), text, case.1, QueryType::Hover, &query);
             assert_eq!(matches, case.2);
         }
     }
 
     #[test]
-    fn ok222() {
+    fn unfinished_tag_name() {
         let cases = [(
             r#"<a hx-swap class="text-2xl">
        
@@ -616,7 +575,8 @@ mod tests1 {
         for case in cases {
             let text = case.0;
             let tree = prepare_tree(text);
-            let matches = query_position(tree.root_node(), text, case.1, case.2);
+            let query = HTMLQueries::default();
+            let matches = query_position(tree.root_node(), text, case.1, case.2, &query);
             assert_eq!(matches, Some(Position::AttributeName(String::from("--"))));
             // assert_eq!(matches, case.2);
         }

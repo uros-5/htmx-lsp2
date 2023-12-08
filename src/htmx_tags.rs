@@ -1,40 +1,88 @@
+
 use tree_sitter::Point;
 
-#[derive(Debug)]
-struct Tag<'a> {
-    data: &'a str,
-    start: usize,
-    end: usize,
+use crate::position::PositionDefinition;
+
+#[derive(Debug, Clone)]
+pub struct Tag {
+    pub name: String,
+    pub start: usize,
+    pub end: usize,
+    pub file: usize,
+    pub line: usize,
 }
 
-pub fn find_tag(tags: &str, start: usize, _end: usize, point: Point) -> Option<String> {
-    let parts = tags.split(" ");
-    let parts = parts.into_iter();
+impl Tag {
+    pub fn set_file(&mut self, index: usize) {
+        self.file = index;
+    }
 
-    let mut iter_start = start;
+    pub fn set_line(&mut self, line: usize) {
+        self.line = line;
+    }
+}
+
+pub fn in_tag(line: &str, point: Point) -> Option<Tag> {
+    if let Some(tag) = get_tag(line) {
+        if point.column >= tag.start && point.column <= tag.end {
+            return Some(tag);
+        }
+    }
+    None
+}
+
+pub fn get_tag(line: &str) -> Option<Tag> {
+    let parts = line.split("hx@");
+    let mut first = parts.filter(|data| !data.contains(' '));
+    if let Some(first) = first.next() {
+        let mut parts = first.split(' ');
+        if let Some(first) = parts.next() {
+            let full = format!("hx@{}", &first);
+            if let Some(start) = line.find(&full) {
+                let end = start + 2 + first.len();
+                return Some(Tag {
+                    name: first.to_string(),
+                    start,
+                    end,
+                    file: 0,
+                    line: 0,
+                });
+            }
+        }
+    }
+    None
+}
+
+pub fn get_tags(value: &str, mut start_char: usize, line: usize) -> Option<Vec<Tag>> {
+    if value.starts_with(' ') || value.contains("  ") {
+        return None;
+    }
     let mut tags = vec![];
+    let parts = value.split(' ');
     for part in parts {
-        let start = iter_start + 1;
-        iter_start += part.len();
-        let end = iter_start;
+        let start = start_char;
+        let end = start + part.len() - 1;
+        start_char = end + 2;
         let tag = Tag {
-            start: start.try_into().unwrap(),
-            end: end.try_into().unwrap(),
-            data: part,
+            name: String::from(part),
+            start,
+            end,
+            file: 0,
+            line,
         };
         tags.push(tag);
     }
-    let filtered: Vec<_> = tags
-        .iter()
-        .filter(|c| {
-            if point.column >= c.start && point.column < c.end {
-                return true;
+    Some(tags)
+}
+
+pub fn in_tags(value: &str, definition: PositionDefinition) -> Option<Tag> {
+    if let Some(tags) = get_tags(value, definition.start, definition.line) {
+        for tag in tags {
+            let t = definition.point.column >= tag.start && definition.point.column <= tag.end;
+            if t {
+                return Some(tag);
             }
-            false
-        })
-        .collect();
-    if let Some(filtered) = filtered.first() {
-        return Some(String::from(filtered.data));
+        }
     }
     None
 }

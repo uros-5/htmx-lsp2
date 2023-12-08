@@ -124,6 +124,19 @@ pub static HX_HTML: &str = r#"
         	)
     )
     
-    (#match? @attr_name "A")
+    (#match? @attr_name "hx-lsp")
+)
+"#;
+
+pub static HX_ANY_HTML: &str = r#"
+(
+	(attribute
+    	(attribute_name) @attr_name
+        (quoted_attribute_value
+        	(attribute_value) @attr_value
+        	)
+    )
+    
+    (#match? @attr_name "NAME")
 )
 "#;

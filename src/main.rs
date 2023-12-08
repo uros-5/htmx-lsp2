@@ -1,4 +1,3 @@
-pub mod htmx_tags;
 use htmx_ai::server::BackendHtmx;
 use tower_lsp::{LspService, Server};
 #[tokio::main]

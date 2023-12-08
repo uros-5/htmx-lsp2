@@ -1,24 +1,28 @@
 use crate::config::{read_config, validate_config, HtmxConfig};
+use crate::htmx_tags::Tag;
+use crate::query_helper::{query_tag, HtmxQuery, Queries};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
 
-use std::time::Duration;
+use std::path::Path;
+use std::sync::{Arc, Mutex, RwLock};
 
 use dashmap::DashMap;
 use ropey::Rope;
 
-use tower_lsp::jsonrpc::{Error, Result};
+use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
-    CodeActionProviderCapability, CompletionContext, CompletionItem, CompletionItemKind,
-    CompletionOptions, CompletionParams, CompletionResponse, CompletionTriggerKind, Diagnostic,
-    DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+    CodeActionParams, CodeActionProviderCapability, CodeActionResponse, CompletionContext,
+    CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams, CompletionResponse,
+    CompletionTriggerKind, Diagnostic, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DidSaveTextDocumentParams, GotoDefinitionParams,
     GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
-    InitializedParams, MarkupContent, MarkupKind, MessageType, OneOf, Position as PositionType,
-    Range, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    InitializedParams, Location, MarkupContent, MarkupKind, MessageType, OneOf, ReferenceParams,
+    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+    TextDocumentSyncSaveOptions, Url,
 };
 use tower_lsp::lsp_types::{InitializeParams, ServerInfo};
 use tower_lsp::{lsp_types::InitializeResult, Client, LanguageServer};
+use tree_sitter::Point;
 
 use crate::htmx_tree_sitter::LspFiles;
 use crate::init_hx::{init_hx_tags, init_hx_values, HxCompletion};
@@ -32,6 +36,7 @@ pub struct BackendHtmx {
     is_helix: RwLock<bool>,
     htmx_config: RwLock<Option<HtmxConfig>>,
     lsp_files: Arc<Mutex<LspFiles>>,
+    queries: Queries,
 }
 
 impl BackendHtmx {
@@ -44,35 +49,63 @@ impl BackendHtmx {
             is_helix: RwLock::new(false),
             htmx_config: RwLock::new(None),
             lsp_files: Arc::new(Mutex::new(LspFiles::default())),
+            queries: Queries::default(),
         }
     }
 
-    async fn on_change(&self, params: TextDocumentItem) {
-        self.config_error(params.uri.clone());
+    async fn on_change(&self, params: ServerTextDocumentItem) {
         let rope = ropey::Rope::from_str(&params.text);
         self.document_map
             .insert(params.uri.to_string(), rope.clone());
         let _ = self.lsp_files.lock().is_ok_and(|lsp_files| {
-            let index = lsp_files.get_index(&params.uri.to_string());
-            let _ = index.is_some_and(|index| {
-                lsp_files.add_tree(index, None, &params.text, None);
-                true
-            });
+            lsp_files.on_change(params);
             true
         });
     }
 
-    async fn config_error(&self, url: Url) {
-        let pos = PositionType::new(0, 0);
-        let diag = Diagnostic {
-            range: Range::new(pos, pos),
-            severity: Some(DiagnosticSeverity::WARNING),
-            message: String::from("test"),
-            ..Default::default()
-        };
-        let diags = vec![diag];
-        self.client.publish_diagnostics(url, diags, None).await;
-        std::thread::sleep(Duration::from_secs(2));
+    async fn publish_tag_diagnostics(&self, diagnostics: Vec<Tag>, file: Option<String>) {
+        let mut hm: HashMap<String, Vec<Diagnostic>> = HashMap::new();
+        let len = diagnostics.len();
+        let _ = self.lsp_files.lock().is_ok_and(|lsp_files| {
+            lsp_files.publish_tag_diagnostics(diagnostics, &mut hm);
+            true
+        });
+        for (url, diagnostics) in hm {
+            if let Ok(uri) = Url::parse(&url) {
+                self.client
+                    .publish_diagnostics(uri, diagnostics, None)
+                    .await;
+            }
+        }
+        if let Some(uri) = file {
+            if len == 0 {
+                let uri = Url::parse(&uri).unwrap();
+                self.client.publish_diagnostics(uri, vec![], None).await;
+            }
+        }
+    }
+
+    fn check_definition(&self, position: Option<Position>) -> Option<GotoDefinitionResponse> {
+        let mut def = None;
+        let _ = position.is_some_and(|position| {
+            if let Position::AttributeValue {
+                name,
+                value,
+                definition,
+            } = position
+            {
+                if &name == "hx-lsp" {
+                    let _ = self.lsp_files.lock().is_ok_and(|lsp_files| {
+                        lsp_files
+                            .goto_definition_response(definition, &value, &mut def)
+                            .is_some()
+                    });
+                }
+            }
+            true
+        });
+
+        def
     }
 }
 
@@ -108,8 +141,13 @@ impl LanguageServer for BackendHtmx {
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
-                text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::FULL,
+                text_document_sync: Some(TextDocumentSyncCapability::Options(
+                    TextDocumentSyncOptions {
+                        change: Some(TextDocumentSyncKind::FULL),
+                        will_save: Some(true),
+                        save: Some(TextDocumentSyncSaveOptions::Supported(true)),
+                        ..Default::default()
+                    },
                 )),
                 completion_provider: Some(CompletionOptions {
                     resolve_provider: Some(false),
@@ -140,31 +178,56 @@ impl LanguageServer for BackendHtmx {
         self.client
             .log_message(MessageType::INFO, "initialized!")
             .await;
-        if let Err(err) = read_config(&self.htmx_config, &self.lsp_files) {
-            let msg = err.to_string();
-            self.client.log_message(MessageType::INFO, msg).await;
-        }
+
+        match read_config(
+            &self.htmx_config,
+            &self.lsp_files,
+            &self.queries,
+            &self.document_map,
+        ) {
+            Ok(diagnostics) => {
+                self.publish_tag_diagnostics(diagnostics, None).await;
+            }
+            Err(err) => {
+                let msg = err.to_string();
+                self.client.log_message(MessageType::INFO, msg).await;
+            }
+        };
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let _temp_uri = params.text_document.uri.clone();
-        self.on_change(TextDocumentItem {
+        self.on_change(ServerTextDocumentItem {
             uri: params.text_document.uri,
             text: params.text_document.text,
-            range: None,
         })
         .await;
     }
 
-    async fn did_save(&self, _: DidSaveTextDocumentParams) {}
-
     async fn did_close(&self, _: DidCloseTextDocumentParams) {}
+
+    async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        let uri = params.text_document.uri.to_string();
+        let _path = Path::new(&uri);
+        let mut diags = vec![];
+        if let Ok(lsp_files) = self.lsp_files.lock() {
+            if let Some(diagnostics) = lsp_files.saved(
+                &uri,
+                &mut diags,
+                &self.htmx_config,
+                &self.document_map,
+                &self.queries,
+            ) {
+                diags = diagnostics;
+            }
+        }
+        self.publish_tag_diagnostics(diags, Some(uri)).await;
+    }
 
     async fn did_change(&self, mut params: DidChangeTextDocumentParams) {
         if let Some(text) = params.content_changes.first_mut() {
-            self.on_change(TextDocumentItem {
+            self.on_change(ServerTextDocumentItem {
                 uri: params.text_document.uri,
-                range: text.range,
                 text: std::mem::take(&mut text.text),
             })
             .await
@@ -184,6 +247,7 @@ impl LanguageServer for BackendHtmx {
                 })
             )
         };
+        // TODO disable for backend and javascript
         if !can_complete {
             let is_helix = self.is_helix.read().is_ok_and(|d| *d);
             if !is_helix {
@@ -198,6 +262,7 @@ impl LanguageServer for BackendHtmx {
             uri.to_string(),
             QueryType::Completion,
             &self.lsp_files,
+            &self.queries.html,
         );
         if let Some(result) = result {
             match result {
@@ -213,7 +278,7 @@ impl LanguageServer for BackendHtmx {
                                 ..Default::default()
                             });
                         }
-                        return Ok(Some(ret).map(CompletionResponse::Array));
+                        return Ok(Some(CompletionResponse::Array(ret)));
                     }
                 }
                 Position::AttributeValue { name, .. } => {
@@ -227,7 +292,7 @@ impl LanguageServer for BackendHtmx {
                                 ..Default::default()
                             });
                         }
-                        return Ok(Some(ret).map(CompletionResponse::Array));
+                        return Ok(Some(CompletionResponse::Array(ret)));
                     }
                     return Ok(None);
                 }
@@ -244,6 +309,7 @@ impl LanguageServer for BackendHtmx {
             uri.to_string(),
             QueryType::Hover,
             &self.lsp_files,
+            &self.queries.html,
         );
 
         if let Some(result) = result {
@@ -267,7 +333,7 @@ impl LanguageServer for BackendHtmx {
                         return Ok(Some(hover));
                     }
                 }
-                Position::AttributeValue { name, value } => {
+                Position::AttributeValue { name, value, .. } => {
                     if let Some(res) = self.hx_attribute_values.get(&name) {
                         if let Some(res) = res.iter().find(|x| x.name == value).cloned() {
                             let markup_content = MarkupContent {
@@ -293,21 +359,76 @@ impl LanguageServer for BackendHtmx {
         &self,
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
-        let tree = self.lsp_files.lock().is_ok_and(|lsp_files| {
-            let index = lsp_files.get_index(
-                &params
-                    .text_document_position_params
-                    .text_document
-                    .uri
-                    .to_string(),
-            );
-            index.is_some_and(|index| {
-                let tree = lsp_files.get_tree(index);
+        let mut res = Ok(None);
+        let _tree = self.lsp_files.lock().is_ok_and(|lsp_files| {
+            // TODO self.lsp_files.goto_definition(&file )
+            let file = params
+                .text_document_position_params
+                .text_document
+                .uri
+                .to_string();
+            if !file.ends_with("jinja") {
+                return false;
+            }
+            let index = lsp_files.get_index(&file);
+            drop(lsp_files);
+            let _ = index.is_some_and(|_index| {
+                let position = get_position_from_lsp_completion(
+                    &params.text_document_position_params,
+                    &self.document_map,
+                    file,
+                    QueryType::Definition,
+                    &self.lsp_files,
+                    &self.queries.html,
+                );
+                res = Ok(self.check_definition(position));
                 true
             });
             true
         });
-        Err(Error::method_not_found())
+        res
+    }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let uri = String::from(&params.text_document_position.text_document.uri.to_string());
+        let point = Point::new(
+            params.text_document_position.position.line as usize,
+            params.text_document_position.position.character as usize,
+        );
+        if let Ok(config) = self.htmx_config.read() {
+            if let Some(_a) = config.as_ref() {
+                // TODO lsp_files.
+                let _tree = self.lsp_files.lock().is_ok_and(|lsp_files| {
+                    let file = params.text_document_position.text_document.uri.to_string();
+                    let index = lsp_files.get_index(&file);
+                    if let Some(index) = index {
+                        if let Some(tree) = lsp_files.get_tree(index) {
+                            if let Ok(c) = HtmxQuery::try_from(tree.1) {
+                                let query = self.queries.get(c);
+                                let content = self.document_map.get(&uri).unwrap();
+                                let mut w = LocalWriter::default();
+                                let _ = content.value().write_to(&mut w);
+                                drop(content);
+                                let tags = query_tag(
+                                    tree.0.root_node(),
+                                    &w.content,
+                                    point,
+                                    &QueryType::Completion,
+                                    query,
+                                    false,
+                                );
+                            }
+                        }
+                    }
+                    true
+                });
+            }
+        }
+        Ok(None)
+    }
+
+    async fn code_action(&self, _params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        Ok(None)
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -315,8 +436,25 @@ impl LanguageServer for BackendHtmx {
     }
 }
 
-struct TextDocumentItem {
-    uri: Url,
-    text: String,
-    range: Option<Range>,
+pub struct ServerTextDocumentItem {
+    pub uri: Url,
+    pub text: String,
+}
+
+#[derive(Default, Debug)]
+pub struct LocalWriter {
+    pub content: String,
+}
+
+impl std::io::Write for LocalWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if let Ok(b) = std::str::from_utf8(buf) {
+            self.content.push_str(b);
+        }
+        Ok(self.content.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }

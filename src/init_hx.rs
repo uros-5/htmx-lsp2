@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HxCompletion {
     pub name: String,
@@ -223,6 +225,23 @@ impl From<usize> for LangType {
             0 => LangType::Template,
             1 => LangType::JavaScript,
             2 => LangType::Backend,
+            _ => LangType::Backend,
+        }
+    }
+}
+
+// impl From<(&HtmxConfig)> for LangType {
+//     fn from(value: &HtmxConfig) -> Self {
+//         // match c[]
+//     }
+// }
+
+impl From<(&str, &str, &str)> for LangType {
+    fn from(value: (&str, &str, &str)) -> Self {
+        // file, template, backend
+        match value.0 {
+            "js" | "ts" => LangType::JavaScript,
+            template if template == value.1 => LangType::Template,
             _ => LangType::Backend,
         }
     }
