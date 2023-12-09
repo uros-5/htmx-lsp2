@@ -374,15 +374,16 @@ impl LanguageServer for BackendHtmx {
     }
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let mut locations = None;
         if let Ok(config) = self.htmx_config.read() {
             if let Some(_a) = config.as_ref() {
-                let _tree = self.lsp_files.lock().is_ok_and(|lsp_files| {
-                    lsp_files.references(params, &self.queries, &self.document_map);
+                let _ = self.lsp_files.lock().is_ok_and(|lsp_files| {
+                    locations = lsp_files.references(params, &self.queries, &self.document_map);
                     false
                 });
             }
         }
-        Ok(None)
+        Ok(locations)
     }
 
     async fn code_action(&self, _params: CodeActionParams) -> Result<Option<CodeActionResponse>> {

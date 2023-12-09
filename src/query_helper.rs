@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use tree_sitter::{Node, Point, Query, QueryCursor};
 
 use crate::{
-    htmx_tags::{get_tag, Tag},
+    htmx_tags::{get_tag, get_tags, Tag},
     init_hx::LangType,
     position::{CaptureDetails, Position, PositionDefinition, QueryType},
     queries::{HX_ANY_HTML, HX_HTML, HX_JS_TAGS, HX_NAME, HX_RUST_TAGS, HX_VALUE},
@@ -270,4 +270,38 @@ pub fn query_tag(
         }
     }
     tags
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn query_htmx_lsp(
+    element: Node<'_>,
+    source: &str,
+    trigger_point: Point,
+    _query_type: &QueryType,
+    query: &Query,
+    tag_name: &str,
+    references: &mut Vec<Tag>,
+    file: usize,
+) {
+    let lsp_names = query_props(element, source, trigger_point, query, true);
+    for capture in lsp_names {
+        if capture.0.starts_with("attr_value") {
+            let value = capture.1.value;
+            let tags = get_tags(
+                &value,
+                capture.1.start_position.column,
+                capture.1.start_position.row,
+            );
+            if let Some(tags) = tags {
+                let tag = tags.iter().find(|item| item.name == tag_name);
+                if let Some(tag) = tag {
+                    let mut tag = tag.clone();
+                    tag.file = file;
+                    references.push(tag);
+                }
+            }
+            // let position = PositionDefinition::new(capture.1.start_position.row, capture.1.start_position.column);
+            //
+        }
+    }
 }

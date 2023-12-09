@@ -122,7 +122,7 @@ pub static HX_HTML: &str = r#"
         (quoted_attribute_value
         	(attribute_value) @attr_value
         	)
-    )
+    ) @hx_comment
     
     (#match? @attr_name "hx-lsp")
 )

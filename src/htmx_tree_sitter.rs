@@ -22,7 +22,10 @@ use crate::{
     init_hx::LangType,
     position::{query_position, Position as PositionType, PositionDefinition, QueryType},
     queries::{HX_JS_TAGS, HX_RUST_TAGS},
-    query_helper::{query_tag, HTMLQueries as HTMLQueries2, HtmxQuery, Queries},
+    query_helper::{
+        query_htmx_lsp, query_tag, query_value, HTMLQueries as HTMLQueries2, HTMLQuery, HtmxQuery,
+        Queries,
+    },
     server::{LocalWriter, ServerTextDocumentItem},
 };
 
@@ -307,7 +310,8 @@ impl LspFiles {
         params: ReferenceParams,
         queries: &Queries,
         document_map: &DashMap<String, Rope>,
-    ) -> Option<()> {
+    ) -> Option<Vec<Location>> {
+        let mut locations = None;
         let uri = String::from(&params.text_document_position.text_document.uri.to_string());
         let point = Point::new(
             params.text_document_position.position.line as usize,
@@ -321,7 +325,7 @@ impl LspFiles {
             let mut w = LocalWriter::default();
             let _ = content.value().write_to(&mut w);
             drop(content);
-            let _tags = query_tag(
+            let tags = query_tag(
                 tree.0.root_node(),
                 &w.content,
                 point,
@@ -329,9 +333,39 @@ impl LspFiles {
                 query,
                 false,
             );
+            let tag = tags.first()?;
+            drop(tree);
+            let mut references = vec![];
+            for tree in self.trees.iter() {
+                if tree.1 == LangType::Template {
+                    let file = self.get_uri(*tree.key())?;
+                    let mut w = LocalWriter::default();
+                    let content = document_map.get(&file)?;
+                    content.value().write_to(&mut w);
+                    query_htmx_lsp(
+                        tree.0.root_node(),
+                        &w.content,
+                        Point::new(0, 0),
+                        &QueryType::Hover,
+                        queries.html.get(HTMLQuery::Lsp),
+                        &tag.name,
+                        &mut references,
+                        *tree.key(),
+                    );
+                }
+            }
+            let mut response = vec![];
+            for i in &references {
+                let index = self.get_uri(i.file)?;
+                let start = Position::new(i.line as u32, i.start as u32);
+                let end = Position::new(i.line as u32, i.end as u32);
+                let range = Range::new(start, end);
+                let location = Location::new(Url::parse(&index).unwrap(), range);
+                response.push(location);
+            }
+            locations = Some(response);
         }
-        //
-        None
+        locations
     }
 
     pub fn get_tree(&self, index: usize) -> Option<Ref<'_, usize, (Tree, LangType)>> {

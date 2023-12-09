@@ -114,7 +114,7 @@ pub fn query_position(
 }
 
 #[allow(dead_code)]
-fn dbg_props(props: &HashMap<String, CaptureDetails>) {
+pub fn dbg_props(props: &HashMap<String, CaptureDetails>) {
     for i in props {
         dbg!(i);
     }
