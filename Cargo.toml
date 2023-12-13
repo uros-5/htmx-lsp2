@@ -21,6 +21,8 @@ walkdir = "2.4.0"
 anyhow = "1.0.75"
 thiserror = "1.0.50"
 tree-sitter-javascript = "0.20.1"
+tree-sitter-python = "0.20.4"
+tree-sitter-go = "0.20.0"
 
 [profile.dev]
 opt-level = 1
