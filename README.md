@@ -1,81 +1,65 @@
-# boilerplate for a  rust language server powered by `tower-lsp` 
-## Introduction
-This repo is a template for `tower-lsp`, a useful github project template which makes writing new language servers easier.
+<div align="center">
+  <a href="https://github.com/ThePrimeagen/htmx-lsp#gh-light-mode-only"><img src="assets/logo.svg#gh-light-mode-only"        width="300px" alt="HTMX-LSP logo"/></a>
+  <a href="https://github.com/ThePrimeagen/htmx-lsp#gh-dark-mode-only"><img src="assets/logo.darkmode.svg#gh-dark-mode-only" width="300px" alt="HTMX-LSP logo"/></a>
+  <br>
+  <a href="https://crates.io/crates/htmx-lsp"><img alt="crates.io" src="https://img.shields.io/crates/v/htmx-lsp.svg?style=for-the-badge&color=bc3f48&logo=rust" height="20"></a>
+  <a href="https://github.com/ThePrimeagen/htmx-lsp/actions?query=branch%3Amaster"><img alt="build status" src="https://img.shields.io/github/actions/workflow/status/ThePrimeagen/htmx-lsp/ci.yml?branch=master&style=for-the-badge&logo=github" height="20"></a>
+</div>
+
+<h4 align="center">
+     its so over
+</h4>
+
+## LSP
+
+Right now this is very much so a work in progress and currently provides basic autocomplete for _most_ HTMX attributes. We have reached a point where I could use help! If you want to fill in documentation or help with autocompletes please open an issue/pr!
+
+## Integration
+
+### Neovim
+
+`htmx-lsp` can be installed via Mason. And can be configured with `lspconfig`
+
+```lua
+local lspconfig = require('lspconfig')
+-- ...
+lspconfig.htmx.setup{}
+```
+
+Another option is to use [lsp-debug-tools](https://github.com/ThePrimeagen/lsp-debug-tools.nvim)
+
+### VSCode
+
+No published extension yet, but there is a development extension in the [`clients/vscode`](client/vscode/README.md) folder (with setup instructions)
+
 ## Development
-1. `pnpm i`
-2. `cargo build`
-3. press <kbd>F5</kbd> or change to the Debug panel and click <kbd>Launch Client</kbd>
-> **Note**  
-> 
-> If encountered errors like `Cannot find module '/xxx/xxx/dist/extension.js'`
-> please try run command `tsc -b` manually, you could refer https://github.com/IWANABETHATGUY/tower-lsp-boilerplate/issues/6 for more details
-## A valid program in nano rust 
-```rust
-fn factorial(x) {
-    // Conditionals are supported!
-    if x == 0 {
-        1
-    } else {
-        x * factorial(x - 1)
-    }
-}
 
-// The main function
-fn main() {
-    let three = 3;
-    let meaning_of_life = three * 14 + 1;
+### General
 
-    print("Hello, world!");
-    print("The meaning of life is...");
+As of right now the general goal is just to provide completion for any `-`
+character received without even looking at the context.
 
-    if meaning_of_life == 42 {
-        print(meaning_of_life);
-    } else {
-        print("...something we cannot know");
+After that, would be to perform some code actions that make sense and allow for
+amazing utility around htmx.
 
-        print("However, I can tell you that the factorial of 10 is...");
-        // Function calling
-        print(factorial(10));
-    }
-}
+```console
+htmx-lsp -f /path/to/file --level [OFF | TRACE | DEBUG | INFO | WARN | ERROR]
 ```
-## Features
-This repo use a language `nano rust` which first introduced by [ chumsky ](https://github.com/zesterer/chumsky/blob/master/examples/nano_rust.rs). Most common language feature has been implemented, you could preview via the video below.
 
-- [x] InlayHint for LiteralType
-![inlay hint](https://user-images.githubusercontent.com/17974631/156926412-c3823dac-664e-430e-96c1-c003a86eabb2.gif)
+### Build
 
-- [x] semantic token   
-make sure your semantic token is enabled, you could enable your `semantic token` by
-adding this line  to your `settings.json`
-```json
-{
- "editor.semanticHighlighting.enabled": true,
-}
+```console
+cargo build
+
+# OR auto-build on file save, requires `cargo-watch`
+cargo install cargo-watch
+cargo watch -x build
 ```
-- [x] syntactic error diagnostic
 
-https://user-images.githubusercontent.com/17974631/156926382-a1c4c911-7ea1-4d3a-8e08-3cf7271da170.mp4
+## Contributors
 
-- [x] code completion  
-
-https://user-images.githubusercontent.com/17974631/156926355-010ef2cd-1d04-435b-bd1e-8b0dab9f44f1.mp4
-
-- [x] go to definition  
-
-https://user-images.githubusercontent.com/17974631/156926103-94d90bd3-f31c-44e7-a2ce-4ddfde89bc33.mp4
-
-- [x] find reference
-
-https://user-images.githubusercontent.com/17974631/157367235-7091a36c-631a-4347-9c1e-a3b78db81714.mp4
-
-- [x] rename
-
-https://user-images.githubusercontent.com/17974631/157367229-99903896-5583-4f67-a6da-1ae1cf206876.mp4
-
-
-
-
-
-
-
+<div align="center">
+  <a href="https://github.com/ThePrimeagen/htmx-lsp/graphs/contributors">
+    <img src="https://contrib.rocks/image?repo=ThePrimeagen/htmx-lsp" height="50px"/>
+  </a>
+</div>
