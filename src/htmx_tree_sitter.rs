@@ -366,7 +366,7 @@ impl LspFiles {
             for i in &references {
                 let index = self.get_uri(i.file)?;
                 let start = Position::new(i.line as u32, i.start as u32);
-                let end = Position::new(i.line as u32, i.end as u32);
+                let end = Position::new(i.line as u32, i.end as u32 + 1);
                 let range = Range::new(start, end);
                 let location = Location::new(Url::parse(&index).unwrap(), range);
                 response.push(location);
