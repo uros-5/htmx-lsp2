@@ -1,4 +1,4 @@
-use std::{collections::HashMap, rc::Rc};
+use std::collections::HashMap;
 
 use tree_sitter::{Node, Point, Query, QueryCursor};
 

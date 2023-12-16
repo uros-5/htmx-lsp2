@@ -14,7 +14,7 @@ use tower_lsp::lsp_types::{
     Diagnostic, DiagnosticSeverity, GotoDefinitionParams, GotoDefinitionResponse, Location,
     Position, Range, ReferenceParams, Url,
 };
-use tree_sitter::{Parser, Point, Query, Tree};
+use tree_sitter::{InputEdit, Parser, Point, Query, Tree};
 
 use crate::{
     config::HtmxConfig,
@@ -117,6 +117,23 @@ impl LspFiles {
     pub fn on_change(&self, params: ServerTextDocumentItem) -> Option<()> {
         let file = self.get_index(&params.uri.to_string())?;
         self.add_tree(file, None, &params.text, None);
+        None
+    }
+
+    pub fn input_edit(&self, file: &String, code: String, input_edit: InputEdit) -> Option<()> {
+        let file = self.get_index(file)?;
+        let mut old_tree = self.get_mut_tree(file)?;
+        let _ = self.parsers.lock().is_ok_and(|mut parsers| {
+            old_tree.0.edit(&input_edit);
+            let tree = parsers.parse(old_tree.1, &code, Some(&old_tree.0));
+            if let Some(tree) = tree {
+                let lang = old_tree.1;
+                drop(old_tree);
+                self.trees.insert(file, (tree, lang));
+            }
+            true
+        });
+        //
         None
     }
 
