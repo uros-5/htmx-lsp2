@@ -18,9 +18,9 @@ use tower_lsp::lsp_types::{
     CompletionTriggerKind, Diagnostic, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DidSaveTextDocumentParams, GotoDefinitionParams,
     GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
-    InitializedParams, Location, MarkupContent, MarkupKind, MessageType, OneOf, ReferenceParams,
-    ServerCapabilities, TextDocumentContentChangeEvent, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions, Url,
+    InitializedParams, Location, MarkupContent, MarkupKind, MessageType, OneOf, Range,
+    ReferenceParams, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, Url,
 };
 use tower_lsp::lsp_types::{InitializeParams, ServerInfo};
 use tower_lsp::{lsp_types::InitializeResult, Client, LanguageServer};
@@ -64,12 +64,7 @@ impl BackendHtmx {
         });
     }
 
-    fn on_remove(
-        &self,
-        params: &TextDocumentContentChangeEvent,
-        rope: &mut RefMut<'_, String, Rope>,
-    ) -> Option<()> {
-        let range = params.range?;
+    fn on_remove(&self, range: &Range, rope: &mut RefMut<'_, String, Rope>) -> Option<()> {
         let (start, end) = range.to_byte(rope);
         rope.remove(start..end);
         None
@@ -77,12 +72,12 @@ impl BackendHtmx {
 
     fn on_insert(
         &self,
-        params: &TextDocumentContentChangeEvent,
+        range: &Range,
+        text: &str,
         rope: &mut RefMut<'_, String, Rope>,
     ) -> Option<()> {
-        let range = params.range?;
         let (start, _) = range.to_byte(rope);
-        rope.insert(start, &params.text);
+        rope.insert(start, text);
         None
     }
 
@@ -251,15 +246,16 @@ impl LanguageServer for BackendHtmx {
         let rope = self.document_map.get_mut(uri);
         if let Some(mut rope) = rope {
             for change in params.content_changes {
-                if change.text.is_empty() {
-                    self.on_remove(&change, &mut rope);
-                } else {
-                    self.on_insert(&change, &mut rope);
-                }
                 if let Some(range) = &change.range {
+                    let input_edit = range.to_input_edit(&rope);
+                    if change.text.is_empty() {
+                        self.on_remove(range, &mut rope);
+                    } else {
+                        self.on_insert(range, &change.text, &mut rope);
+                    }
                     let mut w = LocalWriter::default();
                     let _ = rope.write_to(&mut w);
-                    let input_edit = range.to_input_edit(&rope);
+                    let _ = std::fs::write("jeste", &w.content);
                     let _ = self.lsp_files.lock().is_ok_and(|lsp_files| {
                         lsp_files.input_edit(uri, w.content, input_edit);
                         true
