@@ -12,8 +12,8 @@ use dashmap::{
 use ropey::Rope;
 use tower_lsp::lsp_types::{
     request::{GotoImplementationParams, GotoImplementationResponse},
-    Diagnostic, DiagnosticSeverity, GotoDefinitionParams, GotoDefinitionResponse, Location,
-    Position, Range, ReferenceParams, Url,
+    CodeActionParams, Diagnostic, DiagnosticSeverity, GotoDefinitionParams, GotoDefinitionResponse,
+    Location, Position, Range, ReferenceParams, Url,
 };
 use tree_sitter::{InputEdit, Parser, Point, Query, Tree};
 
@@ -28,6 +28,7 @@ use crate::{
         Queries,
     },
     server::{LocalWriter, ServerTextDocumentItem},
+    to_input_edit::to_position,
 };
 
 type FileName = usize;
@@ -144,11 +145,9 @@ impl LspFiles {
     ) {
         for diag in diagnostics {
             if let Some(uri) = self.get_uri(diag.file) {
+                let position = to_position(&diag);
                 let diagnostic = Diagnostic {
-                    range: Range::new(
-                        Position::new(diag.line as u32, diag.start as u32),
-                        Position::new(diag.line as u32, diag.end as u32),
-                    ),
+                    range: Range::new(position.0, position.1),
                     severity: Some(DiagnosticSeverity::WARNING),
                     message: String::from("This tag already exist."),
                     source: Some(String::from("htmx-lsp")),
@@ -222,8 +221,7 @@ impl LspFiles {
         let tag = in_tags(value, definition?)?;
         let tag = self.get_tag(&tag.name)?;
         let file = self.get_uri(tag.file)?;
-        let start = Position::new(tag.line as u32, tag.start as u32);
-        let end = Position::new(tag.line as u32, tag.end as u32);
+        let (start, end) = to_position(&tag);
         let range = Range::new(start, end);
         *def = Some(GotoDefinitionResponse::Scalar(Location {
             uri: Url::parse(&file).unwrap(),
@@ -372,11 +370,12 @@ impl LspFiles {
                     );
                 }
             }
+            references.sort();
             let mut response = vec![];
             for i in &references {
                 let index = self.get_uri(i.file)?;
-                let start = Position::new(i.line as u32, i.start as u32);
-                let end = Position::new(i.line as u32, i.end as u32 + 1);
+                let (start, mut end) = to_position(i);
+                end.character += 1;
                 let range = Range::new(start, end);
                 let location = Location::new(Url::parse(&index).unwrap(), range);
                 response.push(location);
@@ -429,6 +428,60 @@ impl LspFiles {
         };
         let range = Range { start, end };
         Some(GotoImplementationResponse::Scalar(Location { uri, range }))
+    }
+
+    pub fn code_action(
+        &self,
+        params: CodeActionParams,
+        config: &RwLock<HtmxConfig>,
+        query: &HTMLQueries2,
+        document_map: &DashMap<String, Rope>,
+    ) -> Option<()> {
+        let uri = String::from(&params.text_document.uri.to_string());
+        let ext = config.read().is_ok_and(|config| {
+            if !config.is_valid {
+                return false;
+            }
+            let ext = config.file_ext(Path::new(&uri));
+            ext.is_some_and(|lang_type| lang_type == LangType::Template)
+        });
+        if !ext {
+            return None;
+        }
+        let text = {
+            let c = document_map.get(&uri)?;
+            let mut w = LocalWriter::default();
+            let _ = c.value().write_to(&mut w);
+            w
+        };
+        let index = self.get_index(&uri)?;
+        let tree = self.get_tree(index)?;
+        let root_node = tree.0.root_node();
+        let pos = params.range.start;
+        let trigger_point = Point::new(pos.line as usize, pos.character as usize);
+        let position = query_position(
+            root_node,
+            &text.content,
+            trigger_point,
+            QueryType::Definition,
+            query,
+        )?;
+        match position {
+            PositionType::AttributeName(name) => {
+                if name == "hx-lsp" {
+                    Some(())
+                } else {
+                    None
+                }
+            }
+            PositionType::AttributeValue { name, .. } => {
+                if name == "hx-lsp" {
+                    Some(())
+                } else {
+                    None
+                }
+            }
+        }
     }
 
     pub fn query_position(
