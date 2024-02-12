@@ -519,20 +519,28 @@ impl LanguageServer for BackendHtmx {
             let ext = config.file_ext(Path::new(
                 &params.text_document_position.text_document.uri.as_str(),
             ));
-            match ext
-                .and_then(|lang| -> Option<()> {
-                    lang_type = lang.get();
-                    if lang_type == LangType::Template {
-                        None
-                    } else {
-                        Some(())
-                    }
-                })
-                .is_none()
-            {
-                true => return Ok(locations),
-                false => (),
+            if let Some(lang_types) = ext {
+                let lang_type2 = lang_types.get();
+                if lang_type2 == LangType::Template {
+                    return Ok(locations);
+                } else {
+                    lang_type = lang_type2;
+                }
             }
+            // match ext
+            //     .and_then(|lang| -> Option<()> {
+            //         lang_type = lang.get();
+            //         if lang_type == LangType::Template {
+            //             None
+            //         } else {
+            //             Some(())
+            //         }
+            //     })
+            //     .is_none()
+            // {
+            //     true => return Ok(locations),
+            //     false => (),
+            // }
         }
         locations = self.lsp_files.lock().ok().and_then(|lsp_files| {
             self.queries.lock().ok().and_then(|queries| {

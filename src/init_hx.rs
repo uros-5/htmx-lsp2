@@ -17,7 +17,7 @@ impl From<&(&str, &str)> for HxCompletion {
 }
 
 fn to_hx_completion(values: Vec<(&str, &str)>) -> Vec<HxCompletion> {
-    values.iter().filter_map(|x| x.try_into().ok()).collect()
+    values.iter().map(|x| x.into()).collect()
 }
 
 /// Initialize hx attributes.
