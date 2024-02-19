@@ -101,8 +101,7 @@ pub fn get_tags(value: &str, mut start_char: usize, line: usize) -> Option<Vec<T
 pub fn in_tags(value: &str, definition: PositionDefinition) -> Option<Tag> {
     let tags = get_tags(value, definition.start, definition.point.row)?;
     for tag in tags {
-        let t =
-            definition.point.column >= tag.start.row && definition.point.column <= tag.end.column;
+        let t = definition.point.row >= tag.start.row && definition.point.column <= tag.end.column;
         if t {
             return Some(tag);
         }
