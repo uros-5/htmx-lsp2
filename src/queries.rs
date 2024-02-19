@@ -92,30 +92,13 @@ pub static HX_VALUE: &str = r#"
         (#match? @attr_name "hx-.*")
 )"#;
 
-/// Rust comments should be inside of function or closure.
+/// Rust comments should be inside of function, closure or block.
 /// `@hx_comment` - comment. Tag starts after '@'.
 pub static HX_RUST_TAGS: &str = r#"
 (
-  [
-    (
-        (function_item
-            (block
-                (line_comment) @hx_comment
-            )
-        )
-
+    (block
+    	(line_comment) @hx_comment
     )
-
-    (
-      (closure_expression
-          (block
-              (line_comment) @hx_comment
-          )
-      )
-    )
-
-  ]
-
 	(#match? @hx_comment " hx@.*")
 )
 "#;
