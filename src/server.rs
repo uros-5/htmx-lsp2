@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 
-use dashmap::mapref::one::RefMut;
 use dashmap::DashMap;
 use ropey::Rope;
 
@@ -22,8 +21,8 @@ use tower_lsp::lsp_types::{
     DidOpenTextDocumentParams, DidSaveTextDocumentParams, Documentation, ExecuteCommandOptions,
     ExecuteCommandParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
     HoverParams, HoverProviderCapability, ImplementationProviderCapability, InitializedParams,
-    Location, MarkupContent, MarkupKind, MessageType, OneOf, Range, ReferenceParams,
-    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+    Location, MarkupContent, MarkupKind, MessageType, OneOf, ReferenceParams, ServerCapabilities,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
     TextDocumentSyncSaveOptions, Url,
 };
 use tower_lsp::lsp_types::{InitializeParams, ServerInfo};
@@ -75,26 +74,6 @@ impl BackendHtmx {
         let rope = ropey::Rope::from_str(&params.text);
         self.document_map
             .insert(params.uri.to_string(), rope.clone());
-    }
-
-    /// Deleted some parts of document. Called when text content is empty.
-    /// Works also for mutli-cursor.
-    fn on_remove(&self, range: &Range, rope: &mut RefMut<'_, String, Rope>) -> Option<()> {
-        let (start, end) = range.to_byte(rope);
-        rope.remove(start..end);
-        None
-    }
-
-    /// Inserted part of document.
-    fn on_insert(
-        &self,
-        range: &Range,
-        text: &str,
-        rope: &mut RefMut<'_, String, Rope>,
-    ) -> Option<()> {
-        let (start, _) = range.to_byte(rope);
-        rope.insert(start, text);
-        None
     }
 
     /// Client notification for `Tag` errors.
@@ -287,6 +266,69 @@ impl LanguageServer for BackendHtmx {
         self.publish_tag_diagnostics(diags, Some(uri)).await;
     }
 
+    // async fn did_change(&self, params: DidChangeTextDocumentParams) {
+    //     let uri = &params.text_document.uri.to_string();
+    //     let rope = self.document_map.get_mut(uri);
+    //     let lang_types = self
+    //         .htmx_config
+    //         .read()
+    //         .ok()
+    //         .and_then(|lang| lang.file_ext(Path::new(uri)));
+    //     if lang_types.is_none() {
+    //         return;
+    //     }
+    //     let lang_types = lang_types.unwrap();
+    //     if let Some(mut rope) = rope {
+    //         for change in params.content_changes {
+    //             if let Some(range) = &change.range {
+    //                 let input_edit = range.to_input_edit(&rope);
+    //                 if change.text.is_empty() {
+    //                     self.on_remove(range, &mut rope);
+    //                 } else {
+    //                     self.on_insert(range, &change.text, &mut rope);
+    //                 }
+    //                 let mut w = FileWriter::default();
+    //                 let _ = rope.write_to(&mut w);
+    //                 self.lsp_files
+    //                     .lock()
+    //                     .ok()
+    //                     .and_then(|lsp_files| match lang_types {
+    //                         LangTypes::One(lang) => {
+    //                             lsp_files.input_edit(uri, w.content, input_edit, lang)
+    //                         }
+    //                         LangTypes::Two { first, second } => {
+    //                             lsp_files.input_edit(uri, w.content.to_string(), input_edit, first);
+    //                             lsp_files.input_edit(uri, w.content, input_edit, second)
+    //                         }
+    //                     });
+    //             } else {
+    //                 let new_rope = Rope::from_str(&change.text);
+    //                 *rope = new_rope;
+
+    //                 let mut w = FileWriter::default();
+    //                 let _ = rope.write_to(&mut w);
+
+    //                 self.lsp_files
+    //                     .lock()
+    //                     .ok()
+    //                     .and_then(|lsp_files| match lang_types {
+    //                         LangTypes::One(lang) => lsp_files.add_tree(
+    //                             lsp_files.get_index(uri)?,
+    //                             lang,
+    //                             &w.content,
+    //                             None,
+    //                         ),
+    //                         LangTypes::Two { first, second } => {
+    //                             let index = lsp_files.get_index(uri)?;
+    //                             lsp_files.add_tree(index, first, &w.content, None);
+    //                             lsp_files.add_tree(index, second, &w.content, None)
+    //                         }
+    //                     });
+    //             }
+    //         }
+    //     }
+    // }
+
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = &params.text_document.uri.to_string();
         let rope = self.document_map.get_mut(uri);
@@ -302,11 +344,16 @@ impl LanguageServer for BackendHtmx {
         if let Some(mut rope) = rope {
             for change in params.content_changes {
                 if let Some(range) = &change.range {
-                    let input_edit = range.to_input_edit(&rope);
-                    if change.text.is_empty() {
-                        self.on_remove(range, &mut rope);
+                    let input_edit = rope.to_input_edit(*range, &change.text);
+                    let start = rope.to_byte(range.start);
+                    let end = rope.to_byte(range.end);
+                    if start <= end {
+                        rope.remove(start..end);
                     } else {
-                        self.on_insert(range, &change.text, &mut rope);
+                        rope.remove(end..start);
+                    }
+                    if !change.text.is_empty() {
+                        rope.insert(start, &change.text);
                     }
                     let mut w = FileWriter::default();
                     let _ = rope.write_to(&mut w);

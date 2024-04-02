@@ -572,12 +572,12 @@ impl Parsers {
         &mut self,
         lang_type: LangType,
         text: &str,
-        _old_tree: Option<&Tree>,
+        old_tree: Option<&Tree>,
     ) -> Option<Tree> {
         match lang_type {
-            LangType::Template => self.html.parse(text, None),
-            LangType::JavaScript => self.javascript.parse(text, None),
-            LangType::Backend => self.backend.parse(text, None),
+            LangType::Template => self.html.parse(text, old_tree),
+            LangType::JavaScript => self.javascript.parse(text, old_tree),
+            LangType::Backend => self.backend.parse(text, old_tree),
         }
     }
 
