@@ -1,0 +1,79 @@
+{
+  "name": "htmx-lsp2",
+  "description": "htmx-lsp2",
+  "license": "MIT",
+  "version": "0.1.4",
+  "repository": {
+    "url": "https://github.com/uros-5/htmx-lsp2"
+  },
+  "publisher": "urosmrkobrada",
+  "categories": [],
+  "keywords": [
+    "multi-root ready"
+  ],
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "activationEvents": [
+    "onLanguage:jinja-html",
+    "onLanguage:html",
+    "onLanguage:rust"
+  ],
+  "main": "./client/out/extension",
+  "contributes": {
+    "configuration": {
+      "type": "object",
+      "title": "Example configuration",
+      "properties": {
+        "htmx-lsp2.template_ext": {
+          "type": "string",
+          "default": "jinja",
+          "description": "File extension for templates."
+        },
+        "htmx-lsp2.templates": {
+          "type": "string",
+          "default": "./templates",
+          "description": "Directory for templates."
+        },
+        "htmx-lsp2.js_tags": {
+          "type": "string",
+          "default": "./frontend",
+          "description": "Directory for typescript/javascript files."
+        },
+        "htmx-lsp2.backend": {
+          "type": "array",
+          "default": [
+            "./src"
+          ],
+          "description": "Directories where language server can found backend tags."
+        },
+        "htmx-lsp2.lang": {
+          "type": "string",
+          "enum": [
+            "rust",
+            "python",
+            "go"
+          ],
+          "default": "rust",
+          "description": "Set backend language."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -b",
+    "watch": "tsc -b -w",
+    "lint": "eslint ./client/src --ext .ts,.tsx",
+    "test": "sh ./scripts/e2e.sh"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.6",
+    "@types/node": "^18.19.28",
+    "@typescript-eslint/eslint-plugin": "^7.1.0",
+    "@typescript-eslint/parser": "^7.1.0",
+    "eslint": "^8.57.0",
+    "mocha": "^10.3.0",
+    "typescript": "^5.3.3"
+  }
+}
