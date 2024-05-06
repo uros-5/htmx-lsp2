@@ -231,7 +231,7 @@ pub fn query_value(
     let hovered_name = trigger_point < attr_name.end_position && query_type == &QueryType::Hover;
     if hovered_name {
         return Some(Position::AttributeName(attr_name.value.to_string()));
-    } else if props.get("open_quote_error").is_some() || props.get("empty_attribute").is_some() {
+    } else if props.contains_key("open_quote_error") || props.contains_key("empty_attribute") {
         if query_type == &QueryType::Completion {
             if let Some(quoted) = props.get("quoted_attr_value") {
                 if trigger_point >= quoted.end_position {
@@ -341,7 +341,7 @@ pub fn find_hx_lsp(
     query: &Query,
 ) -> Option<CaptureDetails> {
     let props = query_props(element, &source, trigger_point, query, false);
-    if props.get("attr_name").is_some() {
+    if props.contains_key("attr_name") {
         let value = props.get("attr_value")?;
         return Some(value.clone());
     }
